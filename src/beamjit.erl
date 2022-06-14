@@ -29,6 +29,7 @@
 -export([allocate_zero/1]).
 -export([allocate_heap_zero/2]).
 -export([test_heap/1]).
+-export([bs_create_bin/5]).
 
 %% the emitting opcodes 
 -export([label/1]).              %% 1
@@ -206,7 +207,11 @@
 -export([recv_marker_bind/2]).   %% 173
 -export([recv_marker_clear/1]).  %% 174
 -export([recv_marker_reserve/1]). %% 175
--export([recv_marker_use/1]).    %% 176
+-export([recv_marker_use/1]).     %% 176
+-export([bs_create_bin/6]).       %% 177
+-export([call_fun2/3]).           %% 178
+-export([nif_start/0]).           %% 179
+-export([badrecord/1]).           %% 180
 
 %% debug
 -export([load_file/1, load_binary/1]).
@@ -353,6 +358,7 @@
 -define(OTP_22,    ?VSN(22,0,0)).
 -define(OTP_23,    ?VSN(23,0,0)).
 -define(OTP_24,    ?VSN(24,0,0)).
+-define(OTP_25,    ?VSN(25,0,0)).
 
 -define(DEFAULT_VSN, ?OTP_R4).
 
@@ -532,6 +538,10 @@
 -define(RECV_MARKER_CLEAR, 174).
 -define(RECV_MARKER_RESERVE, 175).
 -define(RECV_MARKER_USE, 176).
+-define(BS_CREATE_BIN, 177).
+-define(CALL_FUN2, 178).
+-define(NIF_START, 179).
+-define(BADRECORD, 180).
 
 label(L) when is_integer(L), L>= 0 ->
     emit_op(?LABEL),
@@ -1289,6 +1299,25 @@ recv_marker_use(A1) ->
     emit_op(?RECV_MARKER_USE),
     emit_(A1).
 
+bs_create_bin(Fail,Alloc,Unit,Dst,OpList) ->
+    bs_create_bin(Fail,Alloc,live(),Unit,Dst,OpList).
+
+bs_create_bin(Fail,Alloc,Live,Unit,Dst,OpList) ->
+    emit_op(?BS_CREATE_BIN),
+    emit_F(Fail), emit_(Alloc), emit_(Live), 
+    emit_(Unit), emit_(Dst), emit_(OpList).
+
+call_fun2(Tag, Arity, Func) ->
+    emit_op(?CALL_FUN2),
+    emit_(Tag), emit_A(Arity), emit_(Func).
+
+nif_start() ->
+    emit_op(?NIF_START).
+
+badrecord(Value) ->
+    emit_op(?BADRECORD),
+    emit_(Value).
+
 %% Internal
 
 jctx() ->
@@ -1446,6 +1475,7 @@ emit_arg(A, Arg) ->
 	a -> emit_a(Arg);
 	j -> emit_j(Arg);
 	fr -> emit_fr(Arg);
+	'A' -> emit_A(Arg);
 	'F' -> emit_F(Arg);
 	'U' -> emit_u(Arg);
 	'G' -> emit_G(Arg);
@@ -1494,6 +1524,11 @@ emit_fr(Arg={fr,_}) ->
 
 emit_F(Arg) ->
     emit_data(encode_import(Arg)).
+
+emit_A({u,A}) when A >= 0 -> %% arity value
+    emit_data(encode_ival(?U, A));
+emit_A(A) when is_integer(A), A>=0 ->
+    emit_data(encode_ival(?U, A)).
 
 emit_G({u,U}) when is_integer(U) ->
     emit_data(encode_ival(?U, U));
@@ -2697,7 +2732,11 @@ opcode_map() ->
 ?OPENT(173,recv_marker_bind,['_','_'],?OTP_24),
 ?OPENT(174,recv_marker_clear,['_'],?OTP_24),
 ?OPENT(175,recv_marker_reserve,['_'],?OTP_24),
-?OPENT(176,recv_marker_use,['_'],?OTP_24)
+?OPENT(176,recv_marker_use,['_'],?OTP_24),
+?OPENT(177,bs_create_bin,[j,'_','_','_','_','_'],?OTP_25),
+?OPENT(178,call_fun2,['_','A',s],?OTP_25),
+?OPENT(179,nif_start,[],?OTP_25),
+?OPENT(180,badrecord,['_'],?OTP_25)
 }.
 
 is_bif(Name, Arity)  when is_atom(Name), is_integer(Arity), Arity >= 0 ->
