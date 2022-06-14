@@ -1,0 +1,8 @@
+{application, beamjit,
+ [{description, "BEAM machine code generation for Erlang"},
+  {vsn, git},
+  {modules, ["@@MODULES@@"]},  
+  {mod,{beam_app,[]}},
+  {env, []},
+  {applications,[kernel,stdlib]}
+  ]}.
