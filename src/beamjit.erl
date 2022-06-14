@@ -318,8 +318,7 @@
 	'F' |  %% u     MFA
 	'U' |  %% u     unsigned value
 	'G' |  %% u     bit flags
-	'P' |  %% u     byte offset
-	'Q' |  %% u     unpackable byte offset
+	'R' |  %% u ... arg list
 	h   |  %% u     character
 	fr     %% float reg (fr)
 	.
@@ -827,11 +826,11 @@ test_arity(Fail,Src,Size) ->
 
 select_val(Val,Fail,Pairs) ->
     emit_op(?SELECT_VAL),
-    emit_(Val), emit_(Fail), emit_(Pairs).
+    emit_s(Val), emit_j(Fail), emit_R(Pairs).
 
 select_tuple_arity(Val,Fail,Pairs) ->
     emit_op(?SELECT_TUPLE_ARITY),
-    emit_(Val), emit_(Fail), emit_(Pairs).
+    emit_s(Val), emit_j(Fail), emit_R(Pairs).
 
 jump(F) ->
     emit_op(?JUMP),
@@ -1541,6 +1540,16 @@ emit_L([]) ->
 emit_L(Line=[{location,_Fname,_Ln}]) ->
     emit_data(encode_line(Line)).
 
+emit_R(List) ->
+    emit_data(encode_R(List)).
+
+encode_R({list,L}) ->
+    encode_R(L);
+encode_R(L) when is_list(L) ->
+    {N,Data} = encode_list(L),
+    iolist_to_binary([encode_ival(?Z, ?LIST),
+		      encode_ival(?U, N),
+		      Data]).
 
 encode_bit_flags([little|Fs]) ->
     ?BIT_LITTLE bor encode_bit_flags(Fs);
@@ -1703,6 +1712,12 @@ decode_tag(Tag,Val,Bin) ->
 	?H -> {{h,Val},Bin}
     end.
 
+%% decode aRg list
+decode_R(<<?LIST:4,0:1,?Z:3, Bin/binary>>) ->
+    {{u,N},Bin1} = decode_ival(Bin),
+    {List,Bin2} = decode_list(N, Bin1),
+    {{list,List}, Bin2}.
+
 decode_list(N, Bin) ->
    decode_list(N, Bin, []).
 
@@ -1750,6 +1765,9 @@ decode_arglist([T|Ts], Bin, Acc) ->
 		{Y={y,_},Bin1} ->
 		    decode_arglist(Ts,Bin1,[Y | Acc])
 	    end;
+	'R' ->
+	    {Args,Bin1} = decode_R(Bin),
+	    decode_arglist(Ts,Bin1,[Args|Acc]);
 	x -> 
 	    {X={x,_},Bin1} = decode(Bin),
 	    decode_arglist(Ts,Bin1,[X | Acc]);
@@ -2570,10 +2588,10 @@ opcode_map() ->
 ?OPENT(11,bif2,[j,'F','_','_','_']),
 ?OPENT(12,allocate,['U','U']),
 ?OPENT(13,allocate_heap,['U',k,'U']),
-?OPENT(14,allocate_zero,['U','U']),
-?OPENT(15,allocate_heap_zero,['U','U','U']),
+?OPENT(14,allocate_zero,['U','U'], ?DEFAULT_VSN, ?OTP_24),
+?OPENT(15,allocate_heap_zero,['U','U','U'], ?DEFAULT_VSN, ?OTP_24),
 ?OPENT(16,test_heap,[k,'U']),
-?OPENT(17,init,['_']),
+?OPENT(17,init,['_'], ?DEFAULT_VSN, ?OTP_24),
 ?OPENT(18,deallocate,['U']),
 ?OPENT(19,return,[]),
 ?OPENT(20,send,[]),
@@ -2615,8 +2633,8 @@ opcode_map() ->
 ?OPENT(56,is_nonempty_list,[j,s]),
 ?OPENT(57,is_tuple,[j,s]),
 ?OPENT(58,test_arity,[j,s,'A']),
-?OPENT(59,select_val,['_','_','_']),
-?OPENT(60,select_tuple_arity,['_','_','_']),
+?OPENT(59,select_val,[s,j,'R']),
+?OPENT(60,select_tuple_arity,[s,j,'R']),
 ?OPENT(61,jump,['_']),
 ?OPENT(62,'catch',['_','_']),
 ?OPENT(63,catch_end,['_']),
@@ -2710,17 +2728,17 @@ opcode_map() ->
 ?OPENT(151,recv_set,['_'],?OTP_R14A,?OTP_24),
 ?OPENT(152,gc_bif3,[j,'U','F','_','_','_','_'],?OTP_R14A),
 ?OPENT(153,line,['L'],?OTP_R15A),
-?OPENT(154,put_map_assoc,['_','_','_','_','_'],?OTP_R17),
-?OPENT(155,put_map_exact,['_','_','_','_','_'],?OTP_R17),
+?OPENT(154,put_map_assoc,[j,s,d,'U','R'],?OTP_R17),
+?OPENT(155,put_map_exact,[j,s,d,'U','R'],?OTP_R17),
 ?OPENT(156,is_map,['_','_'],?OTP_R17),
-?OPENT(157,has_map_fields,['_','_','_'],?OTP_R17),
-?OPENT(158,get_map_elements,['_','_','_'],?OTP_R17),
+?OPENT(157,has_map_fields,[j,s,'R'],?OTP_R17),
+?OPENT(158,get_map_elements,[j,s,'R'],?OTP_R17),
 ?OPENT(159,is_tagged_tuple,['_','_','_','_'],?OTP_20),
 ?OPENT(160,build_stacktrace,[],?OTP_21),
 ?OPENT(161,raw_raise,[],?OTP_21),
 ?OPENT(162,get_hd,['_','_'],?OTP_21),
 ?OPENT(163,get_tl,['_','_'],?OTP_21),
-?OPENT(164,put_tuple2,['_','_'],?OTP_22),
+?OPENT(164,put_tuple2,[d,'R'],?OTP_22),
 ?OPENT(165,bs_get_tail,['_','_','_'],?OTP_22),
 ?OPENT(166,bs_start_match3,[j,'_','_','_'],?OTP_22),
 ?OPENT(167,bs_get_position,['_','_','_'],?OTP_22),
