@@ -45,8 +45,8 @@ bif(X) ->
     {A,T}.
 
 pbin(X,Y,Z,B) ->
-    <<B/binary,X:16/native, Y:32/float, Y:32/signed-little, 
-      Z/utf8, Z/utf16, Z/utf32, X:32/little>>.
+    <<B/binary,X:16/native, "Hello", Y:32/float, Y:32/signed-little, 
+      Z/utf8, Z/utf16, Z/utf32, "World", X:32/little>>.
 
 pbits(X,Y,Z,B) ->
     <<X:1, Y:13, Z:17, B/bitstring>>.

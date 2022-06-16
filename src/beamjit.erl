@@ -7,7 +7,7 @@
 
 -module(beamjit).
 
-%% -define(verbose(F,A), io:format((F),(A))).
+%%-define(verbose(F,A), io:format((F),(A))).
 -define(verbose(F,A), ok).
 
 -export([jit/1]).
@@ -134,7 +134,7 @@
 -export([fmul/4]).               %% 100
 -export([fdiv/4]).               %% 101
 -export([fnegate/3]).            %% 102
--export([make_fun2/0]).          %% 103*
+-export([make_fun2/1]).          %% 103*
 -export(['try'/2]).              %% 104*
 -export([try_end/1]).            %% 105*
 -export([try_case/1]).           %% 106*
@@ -213,9 +213,10 @@
 -export([nif_start/0]).           %% 179
 -export([badrecord/1]).           %% 180
 
-%% debug
+%% debug/test
 -export([load_file/1, load_binary/1]).
--export([print_chunks/1]).
+-export([print_file/1,print_chunks/1]).
+-export([test_file/1, test_chunks/1]).
 -export([obsolete/0, obsolete/1]).
 -export([encode/1]).
 -export([decode/1]).
@@ -254,7 +255,8 @@
 	 imports   :: #jctx_table{map::jctx_map(import())},
 	 exports   :: #jctx_table{map::jctx_map(export())},
 	 locals    :: #jctx_table{map::jctx_map(local())},
-	 lines     :: #jctx_table{map::jctx_map(line())}
+	 lines     :: #jctx_table{map::jctx_map(line())},
+	 strings   :: binary()
 	}).
 
 
@@ -319,9 +321,33 @@
 	'U' |  %% u     unsigned value
 	'G' |  %% u     bit flags
 	'R' |  %% u ... arg list
+	st  |  %% u     string arg {string,binary()} in string table
 	h   |  %% u     character
-	fr     %% float reg (fr)
+	l   |  %% l     float reg
+	dlq |  %% d|l|q
+	dl     %% d|l
 	.
+
+-type unsigned() :: non_neg_integer().
+-type jarg() :: {f,Lbl::unsigned()}.
+-type xarg() :: {x,Reg::0..1023}.
+-type yarg() :: {y,Reg::0..1023}.
+-type iarg() :: {i,integer()}.
+-type uarg() :: {u,unsigned()}.
+-type aarg() :: {atom,atom()}.
+-type qarg() :: {literal, term()}.
+-type larg() :: {fr,Reg::0..1023}.
+-type narg() :: [].
+-type carg() :: iarg()|aarg()|narg()|qarg().
+-type reg() :: xarg()|yarg().
+-type src() :: reg()|carg().
+-type dst() :: reg().
+-type dl()  :: dst()|larg().
+-type dlq() :: dst()|larg()|qarg().
+%% -type mfa() :: {extfunc,Mod::atom(),Func::atom(),Arity::unsigned()}.
+-type mfa(A) :: {extfunc,Mod::atom(),Func::atom(),A}.
+
+-define(JARG, {f,_}).
 	
 -record(opcode,
 	{
@@ -361,262 +387,101 @@
 
 -define(DEFAULT_VSN, ?OTP_R4).
 
--define(LABEL, 1).
--define(FUNC_INFO, 2).
--define(INT_CODE_END, 3).
--define(CALL, 4).
--define(CALL_LAST, 5).
--define(CALL_ONLY, 6).
--define(CALL_EXT, 7).
--define(CALL_EXT_LAST, 8).
--define(BIF0, 9).
--define(BIF1, 10).
--define(BIF2, 11).
--define(ALLOCATE, 12).
--define(ALLOCATE_HEAP, 13).
--define(ALLOCATE_ZERO, 14).
--define(ALLOCATE_HEAP_ZERO, 15).
--define(TEST_HEAP, 16).
--define(INIT, 17).
--define(DEALLOCATE, 18).
--define(RETURN, 19).
--define(SEND, 20).
--define(REMOVE_MESSAGE, 21).
--define(TIMEOUT, 22).
--define(LOOP_REC, 23).
--define(LOOP_REC_END, 24).
--define(WAIT, 25).
--define(WAIT_TIMEOUT, 26).
--define(M_PLUS, 27).
--define(M_MINUS, 28).
--define(M_TIMES, 29).
--define(M_DIV, 30).
--define(INT_DIV, 31).
--define(INT_REM, 32).
--define(INT_BAND, 33).
--define(INT_BOR, 34).
--define(INT_BXOR, 35).
--define(INT_BSL, 36).
--define(INT_BSR, 37).
--define(INT_BNOT, 38).
--define(IS_LT, 39).
--define(IS_GE, 40).
--define(IS_EQ, 41).
--define(IS_NE, 42).
--define(IS_EQ_EXACT, 43).
--define(IS_NE_EXACT, 44).
--define(IS_INTEGER, 45).
--define(IS_FLOAT, 46).
--define(IS_NUMBER, 47).
--define(IS_ATOM, 48).
--define(IS_PID, 49).
--define(IS_REFERENCE, 50).
--define(IS_PORT, 51).
--define(IS_NIL, 52).
--define(IS_BINARY, 53).
--define(IS_CONSTANT, 54).
--define(IS_LIST, 55).
--define(IS_NONEMPTY_LIST, 56).
--define(IS_TUPLE, 57).
--define(TEST_ARITY, 58).
--define(SELECT_VAL, 59).
--define(SELECT_TUPLE_ARITY, 60).
--define(JUMP, 61).
--define(CATCH, 62).
--define(CATCH_END, 63).
--define(MOVE, 64).
--define(GET_LIST, 65).
--define(GET_TUPLE_ELEMENT, 66).
--define(SET_TUPLE_ELEMENT, 67).
--define(PUT_STRING, 68).
--define(PUT_LIST, 69).
--define(PUT_TUPLE, 70).
--define(PUT, 71).
--define(BADMATCH, 72).
--define(IF_END, 73).
--define(CASE_END, 74).
--define(CALL_FUN, 75).
--define(MAKE_FUN, 76).
--define(IS_FUNCTION, 77).
--define(CALL_EXT_ONLY, 78).
--define(BS_START_MATCH, 79).
--define(BS_GET_INTEGER, 80).
--define(BS_GET_FLOAT, 81).
--define(BS_GET_BINARY, 82).
--define(BS_SKIP_BITS, 83).
--define(BS_TEST_TAIL, 84).
--define(BS_SAVE, 85).
--define(BS_RESTORE, 86).
--define(BS_INIT, 87).
--define(BS_FINAL, 88).
--define(BS_PUT_INTEGER, 89).
--define(BS_PUT_BINARY, 90).
--define(BS_PUT_FLOAT, 91).
--define(BS_PUT_STRING, 92).
--define(BS_NEED_BUF, 93).
--define(FCLEARERROR, 94).
--define(FCHECKERROR, 95).
--define(FMOVE, 96).
--define(FCONV, 97).
--define(FADD, 98).
--define(FSUB, 99).
--define(FMUL, 100).
--define(FDIV, 101).
--define(FNEGATE, 102).
--define(MAKE_FUN2, 103).
--define(TRY, 104).
--define(TRY_END, 105).
--define(TRY_CASE, 106).
--define(TRY_CASE_END, 107).
--define(RAISE, 108).
--define(BS_INIT2, 109).
--define(BS_BITS_TO_BYTES, 110).
--define(BS_ADD, 111).
--define(APPLY, 112).
--define(APPLY_LAST, 113).
--define(IS_BOOLEAN, 114).
--define(IS_FUNCTION2, 115).
--define(BS_START_MATCH2, 116).
--define(BS_GET_INTEGER2, 117).
--define(BS_GET_FLOAT2, 118).
--define(BS_GET_BINARY2, 119).
--define(BS_SKIP_BITS2, 120).
--define(BS_TEST_TAIL2, 121).
--define(BS_SAVE2, 122).
--define(BS_RESTORE2, 123).
--define(GC_BIF1, 124).
--define(GC_BIF2, 125).
--define(BS_FINAL2, 126).
--define(BS_BITS_TO_BYTES2, 127).
--define(PUT_LITERAL, 128).
--define(IS_BITSTR, 129).
--define(BS_CONTEXT_TO_BINARY, 130).
--define(BS_TEST_UNIT, 131).
--define(BS_MATCH_STRING, 132).
--define(BS_INIT_WRITABLE, 133).
--define(BS_APPEND, 134).
--define(BS_PRIVATE_APPEND, 135).
--define(TRIM, 136).
--define(BS_INIT_BITS, 137).
--define(BS_GET_UTF8, 138).
--define(BS_SKIP_UTF8, 139).
--define(BS_GET_UTF16, 140).
--define(BS_SKIP_UTF16, 141).
--define(BS_GET_UTF32, 142).
--define(BS_SKIP_UTF32, 143).
--define(BS_UTF8_SIZE, 144).
--define(BS_PUT_UTF8, 145).
--define(BS_UTF16_SIZE, 146).
--define(BS_PUT_UTF16, 147).
--define(BS_PUT_UTF32, 148).
--define(ON_LOAD, 149).
--define(RECV_MARK, 150).
--define(RECV_SET, 151).
--define(GC_BIF3, 152).
--define(LLINE, 153).
--define(PUT_MAP_ASSOC, 154).
--define(PUT_MAP_EXACT, 155).
--define(IS_MAP, 156).
--define(HAS_MAP_FIELDS, 157).
--define(GET_MAP_ELEMENTS, 158).
--define(IS_TAGGED_TUPLE, 159).
--define(BUILD_STACKTRACE, 160).
--define(RAW_RAISE, 161).
--define(GET_HD, 162).
--define(GET_TL, 163).
--define(PUT_TUPLE2, 164).
--define(BS_GET_TAIL, 165).
--define(BS_START_MATCH3, 166).
--define(BS_GET_POSITION, 167).
--define(BS_SET_POSITION, 168).
--define(SWAP, 169).
--define(BS_START_MATCH4, 170).
--define(MAKE_FUN3, 171).
--define(INIT_YREGS, 172).
--define(RECV_MARKER_BIND, 173).
--define(RECV_MARKER_CLEAR, 174).
--define(RECV_MARKER_RESERVE, 175).
--define(RECV_MARKER_USE, 176).
--define(BS_CREATE_BIN, 177).
--define(CALL_FUN2, 178).
--define(NIF_START, 179).
--define(BADRECORD, 180).
 
 label(L) when is_integer(L), L>= 0 ->
-    emit_op(?LABEL),
-    emit_u(L).
+    emit_instruction(label, [L]).
     
 func_info(Mod,Func,Arity) when is_atom(Mod), is_atom(Func), 
 			       is_integer(Arity), Arity >= 0 ->
-    emit_op(?FUNC_INFO),
-    emit_a({atom,Mod}),
-    emit_a({atom,Func}),
-    emit_u(Arity).
+    emit_instruction(func_info, [Mod, Func, Arity]);
+func_info({atom,Mod},{atom,Func},Arity) when is_atom(Mod), is_atom(Func), 
+					     is_integer(Arity), Arity >= 0 ->
+    emit_instruction(func_info, [Mod, Func, Arity]).
 
 int_code_end() ->
-    emit_op(?INT_CODE_END).
+    emit_instruction(int_code_end).
 
 call(Arity, F) ->
-    emit_op(?CALL),
-    emit_(Arity),
-    emit_(F).
+    emit_instruction(call, [Arity, F]).
 
 call_last(Arity, F, Dealloc) ->
-    emit_op(?CALL_LAST),
-    emit_(Arity),
-    emit_(F),
-    emit_(Dealloc).
+    emit_instruction(call_last, [Arity,F,Dealloc]).
 
 call_only(Arity,F) ->
-    emit_op(?CALL_ONLY),
-    emit_(Arity),
-    emit_(F).
+    emit_instruction(call_only, [Arity, F]).
 
 call_ext(Arity,Ext) ->
-    emit_op(?CALL_EXT),
-    emit_(Arity),
-    emit_(Ext).
+    emit_instruction(call_ext, [Arity, Ext]).
 
 call_ext_last(Arity,Ext,Dealloc) ->
-    emit_op(?CALL_EXT_LAST),
-    emit_(Arity),
-    emit_(Ext),
-    emit_(Dealloc).
+    emit_instruction(call_ext_last,[Arity,Ext,Dealloc]).
 
-bif0(Bif, Dst) ->
-    emit_op(?BIF0,[{extfunc,erlang,Bif,0},Dst]).
-    
-bif1(Fail, Bif, A1, Dst) ->
+-spec bif0(Bif::atom()|mfa(0), Dst::dst()) ->
+	  ok.
+
+bif0(ExtFunc={extfunc,erlang,Bif,0}, Dst) when is_atom(Bif) ->
+    emit_instruction(bif0,[ExtFunc,Dst]);
+bif0(Bif, Dst) when is_atom(Bif) ->
+    emit_instruction(bif0,[{extfunc,erlang,Bif,0},Dst]).
+
+-spec bif1(Fail::jarg(), Bif::atom()|mfa(1), Arg::src(), Dst::dst()) ->
+	  ok.
+
+bif1(Fail=?JARG,{extfunc,erlang,Bif,1}, Arg, Dst) when is_atom(Bif) ->
+    bif1_(Fail, Bif, Arg, Dst);
+bif1(Fail=?JARG, Bif, Arg, Dst) when is_atom(Bif) ->
+    bif1_(Fail, Bif, Arg, Dst).
+
+bif1_(Fail, Bif, Arg, Dst) ->
     case is_bif(Bif, 1) of
 	false -> error({Bif, not_a_bif});
 	true ->
 	    case is_gc_bif(Bif, 1) of
 		true ->
-		    gc_bif1(Fail,live(),Bif,A1,Dst);
+		    gc_bif1(Fail,live(),Bif,Arg,Dst);
 		false ->
-		    emit_op(?BIF1,[Fail,{extfunc,erlang,Bif,1},A1,Dst]) 
+		    emit_instruction(bif1,[Fail,{extfunc,erlang,Bif,1},
+					   Arg,Dst]) 
 	    end
     end.
 
-bif2(Fail, Bif, A1, A2, Dst) ->
+-spec bif2(Fail::jarg(), Bif::atom()|mfa(2), Arg1::src(), Arg2::src(),
+	   Dst::dst()) -> ok.
+
+bif2(Fail=?JARG,{extfunc,erlang,Bif,2},Arg1,Arg2,Dst) when is_atom(Bif) ->
+    bif2_(Fail,Bif,Arg1,Arg2,Dst);
+bif2(Fail=?JARG, Bif, Arg1, Arg2, Dst) when is_atom(Bif) ->
+    bif2_(Fail, Bif, Arg1, Arg2, Dst).
+
+bif2_(Fail, Bif, Arg1, Arg2, Dst) ->
     case is_bif(Bif, 2) of
 	false -> error({Bif, not_a_bif});
 	true ->
 	    case is_gc_bif(Bif, 2) of
 		true ->
-		    gc_bif2(Fail,live(),Bif,A1,A2,Dst);
+		    gc_bif2(Fail,live(),Bif,Arg1,Arg2,Dst);
 		false ->
-		    emit_op(?BIF2,[Fail,{extfunc,erlang,Bif,2},A1,A2,Dst]) 
+		    emit_instruction(bif2,[Fail,{extfunc,erlang,Bif,2},
+					   Arg1,Arg2,Dst]) 
 	    end
     end.
 
-bif3(Fail, Bif, A1, A2, A3, Dst) ->
+-spec bif3(Fail::jarg(), Bif::atom()|mfa(3),
+	   Arg1::src(), Arg2::src(),Arg3::src(),
+	   Dst::dst()) -> ok.
+
+bif3(Fail=?JARG,{extfunc,erlang,Bif,3},Arg1,Arg2,Arg3,Dst)  when is_atom(Bif) ->
+    bif3_(Fail,Bif,Arg1,Arg2,Arg3,Dst);
+bif3(Fail=?JARG, Bif, Arg1, Arg2, Arg3, Dst) when is_atom(Bif) ->
+    bif3_(Fail, Bif, Arg1, Arg2, Arg3, Dst).
+
+bif3_(Fail, Bif, Arg1, Arg2, Arg3, Dst) ->
     case is_bif(Bif, 3) of
 	false -> error({Bif, not_a_bif});
 	true ->
 	    case is_gc_bif(Bif, 3) of
 		true ->
-		    gc_bif3(Fail,live(),Bif,A1,A2,A3,Dst)
+		    gc_bif3(Fail,live(),Bif,Arg1,Arg2,Arg3,Dst)
 		%% there is no BIF3 yet..
 	    end
     end.
@@ -624,698 +489,531 @@ bif3(Fail, Bif, A1, A2, A3, Dst) ->
 allocate(StackNeed) ->
     allocate(StackNeed, live()).
 allocate(StackNeed,Live) ->
-    emit_op(?ALLOCATE),
-    emit_(StackNeed),
-    emit_(Live).
+    emit_instruction(allocate,[StackNeed,Live]).
 
 allocate_heap(StackNeed,HeapNeed) ->
     allocate_heap(StackNeed,HeapNeed,live()).
 allocate_heap(StackNeed,HeapNeed,Live) ->
-    emit_op(?ALLOCATE_HEAP),
-    emit_(StackNeed),
-    emit_(HeapNeed),
-    emit_(Live).
+    emit_instruction(allocate_heap,[StackNeed,HeapNeed,Live]).
     
 allocate_zero(StackNeed) ->
     allocate_zero(StackNeed,live()).
 allocate_zero(StackNeed,Live) ->
-    emit_op(?ALLOCATE_ZERO),
-    emit_(StackNeed),
-    emit_(Live).
+    emit_instruction(allocate_zero,[StackNeed,Live]).
 
 allocate_heap_zero(StackNeed,HeapNeed) ->
     allocate_heap_zero(StackNeed,HeapNeed,live()).
 allocate_heap_zero(StackNeed,HeapNeed,Live) ->
-    emit_op(?ALLOCATE_HEAP_ZERO),
-    emit_(StackNeed),
-    emit_(HeapNeed),
-    emit_(Live).
+    emit_instruction(allocate_heap_zero,[StackNeed,HeapNeed,Live]).
 
 test_heap(HeapNeed) ->
     test_heap(HeapNeed,live()).
 test_heap(HeapNeed,Live) ->
-    emit_op(?TEST_HEAP),
-    emit_(HeapNeed),
-    emit_(Live).
+    emit_instruction(test_heap,[HeapNeed,Live]).
     
 init(Dst) ->
-    emit_op(?INIT),
-    emit_(Dst).
+    emit_instruction(init,[Dst]).
 
 deallocate(Deallocate) ->
-    emit_op(?DEALLOCATE),
-    emit_(Deallocate).
+    emit_instruction(deallocate,[Deallocate]).
 
 return() ->
-    emit_op(?RETURN).
+    emit_instruction(return).
 
 send() ->
-    emit_op(?SEND).
+    emit_instruction(send).
 
 remove_message() ->
-    emit_op(?REMOVE_MESSAGE).
+    emit_instruction(remove_message).
 
 timeout() ->
-    emit_op(?TIMEOUT).
+    emit_instruction(timeout).
 
 loop_rec(F,Dst) ->
-    emit_op(?LOOP_REC),
-    emit_(F),
-    emit_(Dst).
+    emit_instruction(loop_rec,[F,Dst]).
     
 loop_rec_end(F) ->
-    emit_op(?LOOP_REC_END),
-    emit_(F).
+    emit_instruction(loop_rec_end,[F]).
 
 wait(F) ->
-    emit_op(?WAIT),
-    emit_(F).
+    emit_instruction(wait,[F]).
 
 wait_timeout(F,Src) ->
-    emit_op(?WAIT_TIMEOUT),
-    emit_(F),
-    emit_(Src).
+    emit_instruction(wait_timeout,[F,Src]).
     
-m_plus(Fail,A1,A2,Reg) -> 
-    emit_op(?M_PLUS),
-    emit_(Fail), emit_(A1), emit_(A2),  emit_(Reg).
+m_plus(Fail=?JARG,A1,A2,Reg) -> 
+    emit_instruction(m_plus,[Fail,A1,A2,Reg]).
     
-m_minus(Fail,A1,A2,Reg) ->
-    emit_op(?M_MINUS),
-    emit_(Fail), emit_(A1), emit_(A2),  emit_(Reg).
+m_minus(Fail=?JARG,A1,A2,Reg) ->
+    emit_instruction(m_minus,[Fail,A1,A2,Reg]).
 
-m_times(Fail,A1,A2,Reg) ->
-    emit_op(?M_TIMES),
-    emit_(Fail), emit_(A1), emit_(A2),  emit_(Reg).
+m_times(Fail=?JARG,A1,A2,Reg) ->
+    emit_instruction(m_times,[Fail,A1,A2,Reg]).
 
-m_div(Fail,A1,A2,Reg) ->
-    emit_op(?M_DIV),
-    emit_(Fail), emit_(A1), emit_(A2),  emit_(Reg).
+m_div(Fail=?JARG,A1,A2,Reg) ->
+    emit_instruction(m_div,[Fail,A1,A2,Reg]).
 
-int_div(Fail,A1,A2,Reg) ->
-    emit_op(?INT_DIV),
-    emit_(Fail), emit_(A1), emit_(A2),  emit_(Reg).
+int_div(Fail=?JARG,A1,A2,Reg) ->
+    emit_instruction(int_div,[Fail,A1,A2,Reg]).
 
-int_rem(Fail,A1,A2,Reg) ->
-    emit_op(?INT_REM),
-    emit_(Fail), emit_(A1), emit_(A2),  emit_(Reg).
+int_rem(Fail=?JARG,A1,A2,Reg) ->
+    emit_instruction(int_rem,[Fail,A1,A2,Reg]).
 
-int_band(Fail,A1,A2,Reg) ->
-    emit_op(?INT_BAND),
-    emit_(Fail), emit_(A1), emit_(A2),  emit_(Reg).
+int_band(Fail=?JARG,A1,A2,Reg) ->
+    emit_instruction(int_band,[Fail,A1,A2,Reg]).
 
-int_bor(Fail,A1,A2,Reg) ->
-    emit_op(?INT_BOR),
-    emit_(Fail), emit_(A1), emit_(A2),  emit_(Reg).
+int_bor(Fail=?JARG,A1,A2,Reg) ->
+    emit_instruction(int_bor,[Fail,A1,A2,Reg]).
+int_bxor(Fail=?JARG,A1,A2,Reg) ->
+    emit_instruction(int_bxor,[Fail,A1,A2,Reg]).
 
-int_bxor(Fail,A1,A2,Reg) ->
-    emit_op(?INT_BXOR),
-    emit_(Fail), emit_(A1), emit_(A2),  emit_(Reg).
+int_bsl(Fail=?JARG,A1,A2,Reg) ->
+    emit_instruction(int_bsl,[Fail,A1,A2,Reg]).
 
-int_bsl(Fail,A1,A2,Reg) ->
-    emit_op(?INT_BSL),
-    emit_(Fail), emit_(A1), emit_(A2),  emit_(Reg).
+int_bsr(Fail=?JARG,A1,A2,Reg) ->
+    emit_instruction(int_bsr,[Fail,A1,A2,Reg]).
+int_bnot(Fail=?JARG,A1,Reg) ->
+    emit_instruction(int_bnot,[Fail,A1,Reg]).
 
-int_bsr(Fail,A1,A2,Reg) ->
-    emit_op(?INT_BSR),
-    emit_(Fail), emit_(A1), emit_(A2),  emit_(Reg).
+is_lt(Fail=?JARG,A1,A2) -> 
+    emit_instruction(is_lt,[Fail,A1,A2]).
 
-int_bnot(Fail,A1,Reg) ->
-    emit_op(?INT_BNOT),
-    emit_(Fail), emit_(A1), emit_(Reg).
-
-is_lt(Fail,A1,A2) -> 
-    emit_op(?IS_LT),
-    emit_(Fail), emit_(A1), emit_(A2).
-
-is_ge(Fail,A1,A2) ->
-    emit_op(?IS_GE),
-    emit_(Fail), emit_(A1), emit_(A2).
+is_ge(Fail=?JARG,A1,A2) ->
+    emit_instruction(is_ge,[Fail,A1,A2]).
 
 is_eq(Fail,A1,A2) ->
-    emit_op(?IS_EQ),
-    emit_(Fail), emit_(A1), emit_(A2).
+    emit_instruction(is_eq, [Fail,A1,A2]).
 
 is_ne(Fail,A1,A2) ->
-    emit_op(?IS_NE),
-    emit_(Fail), emit_(A1), emit_(A2).
+    emit_instruction(is_ne,[Fail,A1,A2]).
 
 is_eq_exact(Fail,A1,A2) ->
-    emit_op(?IS_EQ_EXACT),
-    emit_(Fail), emit_(A1), emit_(A2).
+    emit_instruction(is_eq_exact,[Fail,A1,A2]).
 
 is_ne_exact(Fail,A1,A2) ->
-    emit_op(?IS_NE_EXACT),
-    emit_(Fail), emit_(A1), emit_(A2).
+    emit_instruction(is_ne_exact,[Fail,A1,A2]).
 
 is_integer(Fail,A1) ->
-    emit_op(?IS_INTEGER),
-    emit_(Fail), emit_(A1).
+    emit_instruction(is_integer,[Fail,A1]).
 
 is_float(Fail,A1) ->
-    emit_op(?IS_FLOAT),
-    emit_(Fail), emit_(A1).
+    emit_instruction(is_float,[Fail,A1]).
 
 is_number(Fail,A1) ->
-    emit_op(?IS_NUMBER),
-    emit_(Fail), emit_(A1).
+    emit_instruction(is_number,[Fail,A1]).
 
 is_atom(Fail,A1) ->
-    emit_op(?IS_ATOM),
-    emit_(Fail), emit_(A1).
+    emit_instruction(is_atom,[Fail,A1]).    
 
 is_pid(Fail,A1) ->
-    emit_op(?IS_PID),
-    emit_(Fail), emit_(A1).
+    emit_instruction(is_pid,[Fail,A1]).
 
 is_reference(Fail,A1) ->
-    emit_op(?IS_REFERENCE),
-    emit_(Fail), emit_(A1).
+    emit_instruction(is_reference,[Fail,A1]).
 
 is_port(Fail,A1) ->
-    emit_op(?IS_PORT),
-    emit_(Fail), emit_(A1).
+    emit_instruction(is_port,[Fail,A1]).
 
 is_nil(Fail,A1) ->
-    emit_op(?IS_NIL),
-    emit_(Fail), emit_(A1).
+    emit_instruction(is_nil,[Fail,A1]).
 
 is_binary(Fail,A1) ->
-    emit_op(?IS_BINARY),
-    emit_(Fail), emit_(A1).
+    emit_instruction(is_binary,[Fail,A1]).
 
 is_constant(Fail,A1) ->
-    emit_op(?IS_CONSTANT),
-    emit_(Fail), emit_(A1).
+    emit_instruction(is_constant,[Fail,A1]).
 
 is_list(Fail,A1) ->
-    emit_op(?IS_LIST),
-    emit_(Fail), emit_(A1).
+    emit_instruction(is_list,[Fail,A1]).
 
 is_nonempty_list(Fail,A1) ->
-    emit_op(?IS_NONEMPTY_LIST),
-    emit_(Fail), emit_(A1).
+    emit_instruction(is_nonempty_list,[Fail,A1]).
 
 is_tuple(Fail,A1) ->
-    emit_op(?IS_TUPLE),
-    emit_(Fail), emit_(A1).
+    emit_instruction(is_tuple,[Fail,A1]).
 
 test_arity(Fail,Src,Size) ->
-    emit_op(?TEST_ARITY),
-    emit_(Fail), emit_(Src), emit_(Size).
+    emit_instruction(test_arity,[Fail,Src,Size]).
 
 select_val(Val,Fail,Pairs) ->
-    emit_op(?SELECT_VAL),
-    emit_s(Val), emit_j(Fail), emit_R(Pairs).
+    emit_instruction(select_val, [Val,Fail,Pairs]).
 
 select_tuple_arity(Val,Fail,Pairs) ->
-    emit_op(?SELECT_TUPLE_ARITY),
-    emit_s(Val), emit_j(Fail), emit_R(Pairs).
+    emit_instruction(select_tuple_arity,[Val,Fail,Pairs]).
 
-jump(F) ->
-    emit_op(?JUMP),
-    emit_(F).
+jump(F=?JARG) ->
+    emit_instruction(jump, [F]).
 
 'catch'(Dst,Fail) ->
-    emit_op(?CATCH),
-    emit_(Dst), emit_(Fail).
+    emit_instruction('catch',[Dst,Fail]).
 
 catch_end(Dst) ->
-    emit_op(?CATCH_END),
-    emit_(Dst).
+    emit_instruction(catch_end,[Dst]).
 
 move(Src,Dst) ->
-    emit_op(?MOVE),
-    emit_s(Src), emit_d(Dst).
+    emit_instruction(move,[Src,Dst]).
 
 get_list(Src,Head,Tail) ->
-    emit_op(?GET_LIST),
-    emit_(Src), emit_(Head), emit_(Tail).
+    emit_instruction(get_list,[Src,Head,Tail]).
      
 get_tuple_element(Src,Ix,Dst) ->
-    emit_op(?GET_TUPLE_ELEMENT),
-    emit_(Src), emit_(Ix), emit_(Dst).
+    emit_instruction(get_tuple_element,[Src,Ix,Dst]).
 
 set_tuple_element(Val,Dst,Ix) ->
-    emit_op(?SET_TUPLE_ELEMENT),
-    emit_(Val), emit_(Dst), emit_(Ix).
+    emit_instruction(set_tuple_element,[Val,Dst,Ix]).
 
 put_string(Len,String,Dst) ->
-    emit_op(?PUT_STRING),
-    emit_(Len), emit_(String), emit_(Dst).
+    emit_instruction(put_string,[Len,String,Dst]).
 
 put_list(Head,Tail,Dst) ->
-    emit_op(?PUT_LIST),
-    emit_(Head), emit_(Tail), emit_(Dst).
+    emit_instruction(put_list,[Head,Tail,Dst]).
 
 put_tuple(Arity,Dst) ->
-    emit_op(?PUT_TUPLE),
-    emit_(Arity), emit_(Dst).
+    emit_instruction(put_tuple,[Arity,Dst]).
 
 put(Src) ->
-    emit_op(?PUT),
-    emit_(Src).
+    emit_instruction(put,[Src]).
 
 badmatch(Fail) ->
-    emit_op(?BADMATCH),
-    emit_(Fail).
+    emit_instruction(badmatch,[Fail]).
 
 if_end() ->
-    emit_op(?IF_END).
+    emit_instruction(if_end).
 
 case_end(CaseVal) ->
-    emit_op(?CASE_END),
-    emit_(CaseVal).
+    emit_instruction(case_end,[CaseVal]).
 
 call_fun(Arity) ->
-    emit_op(?CALL_FUN),
-    emit_(Arity).
+    emit_instruction(call_fun,[Arity]).
 
 make_fun(Arg1, Arg2, Arg3) ->
-    emit_op(?MAKE_FUN),
-    emit_(Arg1), emit_(Arg2), emit_(Arg3).
-    
+    emit_instruction(make_fun,[Arg1, Arg2, Arg3]).
+
 is_function(Fail,A1) ->
-    emit_op(?IS_FUNCTION),
-    emit_(Fail), emit_(A1).
+    emit_instruction(is_function,[Fail,A1]).
 
 call_ext_only(Arity,Fun) ->
-    emit_op(?CALL_EXT_ONLY),
-    emit_(Arity), emit_(Fun).
+    emit_instruction(call_ext_only,[Arity,Fun]).
 
 bs_start_match(Fail,Reg) ->
-    emit_op(?BS_START_MATCH),
-    emit_(Fail), emit_(Reg).
+    emit_instruction(bs_start_match,[Fail,Reg]).
     
 bs_get_integer(Fail,List) ->
-    emit_op(?BS_GET_INTEGER),
-    emit_(Fail), emit_(List).
+    emit_instruction(bs_get_integer,[Fail,List]).
     
 bs_get_float(Fail,List) ->
-    emit_op(?BS_GET_FLOAT),
-    emit_(Fail), emit_(List).
+    emit_instruction(bs_get_float,[Fail,List]).
     
 bs_get_binary(Fail,List) ->
-    emit_op(?BS_GET_BINARY),
-    emit_(Fail), emit_(List).
+    emit_instruction(bs_get_binary,[Fail,List]).
 
 bs_skip_bits(Fail,List) ->
-    emit_op(?BS_SKIP_BITS),
-    emit_(Fail), emit_(List).
+    emit_instruction(bs_skip_bits,[Fail,List]).
 
 bs_test_tail(Fail,List) ->
-    emit_op(?BS_TEST_TAIL),
-    emit_(Fail), emit_(List).
+    emit_instruction(bs_test_tail,[Fail,List]).
 
 bs_save(N) ->
-    emit_op(?BS_SAVE),
-    emit_(N).
+    emit_instruction(bs_save,[N]).
 
 bs_restore(N) ->
-    emit_op(?BS_RESTORE),
-    emit_(N).
+    emit_instruction(bs_restore,[N]).
     
 bs_init(N,Flags) ->
-    emit_op(?BS_INIT),
-    emit_(N), emit_(Flags).
+    emit_instruction(bs_init,[N,Flags]).
 
 bs_final(Fail,X) ->
-    emit_op(?BS_FINAL),
-    emit_(Fail), emit_(X).
+    emit_instruction(bs_final,[Fail,X]).
 
-bs_put_integer(Fail,ArgSz,N,Flags,ArgInt) ->
-    emit_op(?BS_PUT_INTEGER),
-    emit_(Fail), emit_(ArgSz), emit_(N), emit_(Flags), emit_(ArgInt).
+bs_put_integer(Fail=?JARG,ArgSz,N,Flags,ArgInt) ->
+    emit_instruction(bs_put_integer,[Fail,ArgSz,N,Flags,ArgInt]).
     
-bs_put_binary(Fail,ArgSz,N,Flags,ArgBin) ->
-    emit_op(?BS_PUT_BINARY),
-    emit_(Fail), emit_(ArgSz), emit_(N), emit_(Flags), emit_(ArgBin).
+bs_put_binary(Fail=?JARG,ArgSz,N,Flags,ArgBin) ->
+    emit_instruction(bs_put_binary,[Fail,ArgSz,N,Flags,ArgBin]).
 
-bs_put_float(Fail,ArgSz,N,Flags,ArgFloat) ->
-    emit_op(?BS_PUT_FLOAT),
-    emit_(Fail), emit_(ArgSz), emit_(N), emit_(Flags), emit_(ArgFloat).
+bs_put_float(Fail=?JARG,ArgSz,N,Flags,ArgFloat) ->
+    emit_instruction(bs_put_float,[Fail,ArgSz,N,Flags,ArgFloat]).
 
 bs_put_string(Len,StrArg) ->
-    emit_op(?BS_PUT_STRING),
-    emit_(Len), emit_(StrArg).
+    emit_instruction(bs_put_string,[Len,StrArg]).
 
 bs_need_buf(N) ->
-    emit_op(?BS_NEED_BUF),
-    emit_(N).
+    emit_instruction(bs_need_buf,[N]).
 
 fclearerror() ->
-    emit_op(?FCLEARERROR).
+    emit_instruction(fclearerror).
 
 fcheckerror(Fail) ->
-    emit_op(?FCHECKERROR),
-    emit_(Fail).
+    emit_instruction(fcheckerror,[Fail]).
 
-fmove(Src,FDst) ->
-    emit_op(?FMOVE),
-    emit_(Src), emit_(FDst).
+-spec fmove(Src::dlq(), Dst::dl()) -> ok.
+
+fmove(Src,Dst) ->
+    emit_instruction(fmove,[Src,Dst]).
 
 fconv(Src,FDst) ->
-    emit_op(?FCONV),
-    emit_(Src), emit_(FDst).
+    emit_instruction(fconv,[Src,FDst]).
 
 fadd(Fail,FA1,FA2,FDst) ->
-    emit_op(?FADD),
-    emit_(Fail), emit_(FA1), emit_(FA2), emit_(FDst).
+    emit_instruction(fadd,[Fail,FA1,FA2,FDst]).
 
 fsub(Fail,FA1,FA2,FDst) ->
-    emit_op(?FSUB),
-    emit_(Fail), emit_(FA1), emit_(FA2), emit_(FDst).
+    emit_instruction(fsub,[Fail,FA1,FA2,FDst]).
 
 fmul(Fail,FA1,FA2,FDst) ->
-    emit_op(?FMUL),
-    emit_(Fail), emit_(FA1), emit_(FA2), emit_(FDst).
+    emit_instruction(fmul,[Fail,FA1,FA2,FDst]).
 
 fdiv(Fail,FA1,FA2,FDst) ->
-    emit_op(?FDIV),
-    emit_(Fail), emit_(FA1), emit_(FA2), emit_(FDst).
+    emit_instruction(fdiv,[Fail,FA1,FA2,FDst]).
 
 fnegate(Fail,FA1,FDst) ->
-    emit_op(?FNEGATE),
-    emit_(Fail), emit_(FA1), emit_(FDst).
+    emit_instruction(fnegate,[Fail,FA1,FDst]).
 
-make_fun2() ->
-    emit_op(?MAKE_FUN2).
+make_fun2(Arg) ->
+    emit_instruction(make_fun2,[Arg]).
 
 'try'(Reg,Fail) ->
-    emit_op(?TRY),
-    emit_(Reg), emit_(Fail).
+    emit_instruction('try',[Reg,Fail]).
 
 try_end(Reg) ->
-    emit_op(?TRY_END),
-    emit_(Reg).
+    emit_instruction(try_end,[Reg]).
 
 try_case(Reg) ->
-    emit_op(?TRY_CASE),
-    emit_(Reg).
+    emit_instruction(try_case,[Reg]).
 
 try_case_end(TryVal) ->
-    emit_op(?TRY_CASE_END),
-    emit_(TryVal).
+    emit_instruction(try_case_end,[TryVal]).
 
 raise(Class,Reason) ->
-    emit_op(?RAISE),
-    emit_(Class), emit_(Reason).
+    emit_instruction(raise,[Class,Reason]).
 
 bs_init2(Fail,Src,W,R,Flags,Dst) ->
-    emit_op(?BS_INIT2),
-    emit_(Fail),emit_(Src),emit_(W),emit_(R),emit_(Flags),emit_(Dst).
+    emit_instruction(bs_init2,[Fail,Src,W,R,Flags,Dst]).
 
 bs_bits_to_bytes(Fail,Src,Dst) ->
-    emit_op(?BS_BITS_TO_BYTES),
-    emit_(Fail), emit_(Src),emit_(Dst).
+    emit_instruction(bs_bits_to_bytes,[Fail,Src,Dst]).
 
 bs_add(Fail,Src1,Src2,Unit,Dst) ->
-    emit_op(?BS_ADD),
-    emit_(Fail), emit_(Src1), emit_(Src2), emit_(Unit), emit_(Dst).
+    emit_instruction(bs_add,[Fail,Src1,Src2,Unit,Dst]).
 
 apply(Arity) ->
-    emit_op(?APPLY),
-    emit_(Arity).
+    emit_instruction(apply,[Arity]).
 
 apply_last(Arity,U) ->
-    emit_op(?APPLY_LAST),
-    emit_(Arity), emit_(U).
+    emit_instruction(apply_last,[Arity,U]).
 
 is_boolean(Fail,A1) ->
-    emit_op(?IS_BOOLEAN),
-    emit_(Fail), emit_(A1).
+    emit_instruction(is_boolean, [Fail, A1]).
 
 is_function2(Fail,A1,A2) ->
-    emit_op(?IS_FUNCTION2),
-    emit_(Fail), emit_(A1), emit_(A2).
-
+    emit_instruction(is_function2,[Fail,A1,A2]).
 
 bs_start_match2(Fail,Ctx,Live,Save,Dst) ->
-    emit_op(?BS_START_MATCH2),
-    emit_(Fail), emit_(Ctx), emit_(Live), emit_op(Save), emit_(Dst).
+    emit_instruction(bs_start_match2,[Fail,Ctx,Live,Save,Dst]).
 
 bs_get_integer2(Fail,Ctx,Live,Size,N,Flags,Dst) ->
-    emit_op(?BS_GET_INTEGER2),
-    emit_(Fail), emit_(Ctx), emit_(Live), emit_(Size), emit_op(N), 
-    emit_(Flags), emit_(Dst).
+    emit_instruction(bs_get_integer2,[Fail,Ctx,Live,Size,N,Flags,Dst]).
 
 bs_get_float2(Fail,Ctx,Live,Size,N,Flags,Dst) ->
-    emit_op(?BS_GET_FLOAT2),
-    emit_(Fail), emit_(Ctx), emit_(Live), emit_(Size), emit_op(N), 
-    emit_(Flags), emit_(Dst).
+    emit_instruction(bs_get_float2,[Fail,Ctx,Live,Size,N,Flags,Dst]).
 
 bs_get_binary2(Fail,Ctx,Live,Size,N,Flags,Dst) ->
-    emit_op(?BS_GET_BINARY2),
-    emit_(Fail), emit_(Ctx), emit_(Live), emit_(Size), emit_op(N), 
-    emit_(Flags), emit_(Dst).
+    emit_instruction(bs_get_binary2,[Fail,Ctx,Live,Size,N,Flags,Dst]).
 
 bs_skip_bits2(Fail,Ctx,Size,Unit,Flags) ->
-    emit_op(?BS_SKIP_BITS2),
-    emit_(Fail), emit_(Ctx), emit_(Size), emit_op(Unit), emit_(Flags).
+    emit_instruction(bs_skip_bits2,[Fail,Ctx,Size,Unit,Flags]).
 
 bs_test_tail2(Fail,Ctx,N) ->
-    emit_op(?BS_TEST_TAIL2),
-    emit_(Fail), emit_(Ctx), emit_(N).
+    emit_instruction(bs_test_tail2,[Fail,Ctx,N]).
 
 bs_save2(Ctx, N) ->
-    emit_op(?BS_SAVE2),
-    emit_(Ctx), emit_(N).
+    emit_instruction(bs_save2,[Ctx, N]).
 
 bs_restore2(Ctx, N) ->
-    emit_op(?BS_RESTORE2),
-    emit_(Ctx), emit_(N).
+    emit_instruction(bs_restore2,[Ctx, N]).
 
-gc_bif1(Fail,Live,Bif,A1,Dst) ->
-    emit_op(?GC_BIF1),
-    emit_(Fail), emit_(Live), emit_({extfunc,erlang,Bif,1}), 
-    emit_(A1), emit_(Dst).
 
-gc_bif2(Fail,Live,Bif,A1,A2,Dst) ->
-    emit_op(?GC_BIF2),
-    emit_(Fail), emit_(Live), emit_({extfunc,erlang,Bif,2}),
-    emit_(A1), emit_(A2), emit_(Dst).
+gc_bif1(Fail,Live,ExtFunc={extfunc,erlang,_Bif,1},A1,Dst) ->
+    emit_instruction(gc_bif1,[Fail,Live,ExtFunc,A1,Dst]);
+gc_bif1(Fail,Live,Bif,A1,Dst) when is_atom(Bif) ->
+    emit_instruction(gc_bif1,[Fail,Live,{extfunc,erlang,Bif,1},A1,Dst]).
+
+gc_bif2(Fail,Live,ExtFunc={extfunc,erlang,_Bif,2},A1,A2,Dst) ->
+    emit_instruction(gc_bif2,[Fail,Live,ExtFunc,A1,A2,Dst]);
+gc_bif2(Fail,Live,Bif,A1,A2,Dst) when is_atom(Bif) ->
+    emit_instruction(gc_bif2,[Fail,Live,{extfunc,erlang,Bif,2},A1,A2,Dst]).
 
 bs_final2(X,Y) ->
-    emit_op(?BS_FINAL),
-    emit_(X), emit_(Y).
+    emit_instruction(bs_final,[X,Y]).
 
 bs_bits_to_bytes2(A2,A3) ->
-    emit_op(?BS_BITS_TO_BYTES2),
-    emit_(A2), emit_(A3).
+    emit_instruction(bs_bits_to_bytes2,[A2,A3]).
 
 put_literal(Index, Dst) ->
-    emit_op(?PUT_LITERAL),
-    emit_(Index), emit_(Dst).
+    emit_instruction(put_literal,[Index, Dst]).
 
 is_bitstr(Fail,A1) ->
-    emit_op(?IS_BITSTR),
-    emit_(Fail), emit_(A1).
+    emit_instruction(is_bitstr,[Fail,A1]).
 
 bs_context_to_binary(Dst) ->
-    emit_op(?BS_CONTEXT_TO_BINARY),
-    emit_(Dst).
+    emit_instruction(bs_context_to_binary,[Dst]).
 
 bs_test_unit(Fail,Ctx,N) ->
-    emit_op(?BS_TEST_UNIT),
-    emit_(Fail), emit_(Ctx), emit_(N).
+    emit_instruction(bs_test_unit,[Fail,Ctx,N]).
 
 bs_match_string(Fail,Ctx,Bits,String) ->
-    emit_op(?BS_MATCH_STRING),
-    emit_(Fail), emit_(Ctx), emit_(Bits), emit_(String).
+    emit_instruction(bs_match_string,[Fail,Ctx,Bits,String]).
 
 bs_init_writable() ->
-    emit_op(?BS_INIT_WRITABLE).
+    emit_instruction(bs_init_writable).
     
 bs_append(Fail,Arg2,W,R,U,Arg6,Flags,Arg8) ->
-    emit_op(?BS_APPEND),
-    emit_(Fail), emit_(Arg2), emit_(W), emit_(R), emit_(U),
-    emit_(Arg6), emit_(Flags), emit_(Arg8).
+    emit_instruction(bs_append,[Fail,Arg2,W,R,U,Arg6,Flags,Arg8]).
 
 bs_private_append(Fail,Arg2,U,Arg4,Flags,Arg6) ->
-    emit_op(?BS_PRIVATE_APPEND),
-    emit_(Fail), emit_(Arg2), emit_(U), emit_(Arg4), emit_(Flags), emit_(Arg6).
+    emit_instruction(bs_private_append,[Fail,Arg2,U,Arg4,Flags,Arg6]).
 
 trim(N,Remaining) ->
-    emit_op(?TRIM),
-    emit_(N), emit_(Remaining).
+    emit_instruction(trim,[N,Remaining]).
 
 bs_init_bits(Fail,Arg2,W,R,Flags,Arg6) ->
-    emit_op(?BS_INIT_BITS),
-    emit_(Fail), emit_(Arg2), emit_(W), emit_(R), emit_(Flags), emit_(Arg6).
+    emit_instruction(bs_init_bits,[Fail,Arg2,W,R,Flags,Arg6]).
     
 bs_get_utf8(Fail,Arg2,Arg3,Flags,Arg4) ->
-    emit_op(?BS_GET_UTF8),
-    emit_(Fail), emit_(Arg2), emit_(Arg3), emit_(Flags), emit_(Arg4).
+    emit_instruction(bs_get_utf8,[Fail,Arg2,Arg3,Flags,Arg4]).
 
 bs_skip_utf8(Fail,Arg2,Arg3,Flags) ->
-    emit_op(?BS_SKIP_UTF8),
-    emit_(Fail), emit_(Arg2), emit_(Arg3), emit_(Flags).
+    emit_instruction(bs_skip_utf8,[Fail,Arg2,Arg3,Flags]).
 
 bs_get_utf16(Fail,Arg2,Arg3,Flags,Arg4) ->
-    emit_op(?BS_GET_UTF16),
-    emit_(Fail), emit_(Arg2), emit_(Arg3), emit_(Flags), emit_(Arg4).
+    emit_instruction(bs_get_utf16,[Fail,Arg2,Arg3,Flags,Arg4]).
 
 bs_skip_utf16(Fail,Arg2,Arg3,Flags) ->
-    emit_op(?BS_SKIP_UTF16),
-    emit_(Fail), emit_(Arg2), emit_(Arg3), emit_(Flags).
+    emit_instruction(bs_skip_utf16,[Fail,Arg2,Arg3,Flags]).
 
 bs_get_utf32(Fail,Arg2,Arg3,Flags,Arg4) ->
-    emit_op(?BS_GET_UTF32),
-    emit_(Fail), emit_(Arg2), emit_(Arg3), emit_(Flags), emit_(Arg4).
+    emit_instruction(bs_get_utf32,[Fail,Arg2,Arg3,Flags,Arg4]).
 
 bs_skip_utf32(Fail,Arg2,Arg3,Flags) ->
-    emit_op(?BS_SKIP_UTF32),
-    emit_(Fail), emit_(Arg2), emit_(Arg3), emit_(Flags).
+    emit_instruction(bs_skip_utf32,[Fail,Arg2,Arg3,Flags]).
 
 bs_utf8_size(Fail,Arg2,Arg3) ->
-    emit_op(?BS_UTF8_SIZE),
-    emit_(Fail), emit_(Arg2), emit_(Arg3).
+    emit_instruction(bs_utf8_size,[Fail,Arg2,Arg3]).
 
 bs_put_utf8(Fail,Flags,Arg3) ->
-    emit_op(?BS_PUT_UTF8),
-    emit_(Fail), emit_(Flags), emit_(Arg3).
+    emit_instruction(bs_put_utf8,[Fail,Flags,Arg3]).
 
 bs_utf16_size(Fail,Arg2,Arg3) ->
-    emit_op(?BS_UTF16_SIZE),
-    emit_(Fail), emit_(Arg2), emit_(Arg3).
+    emit_instruction(bs_utf16_size,[Fail,Arg2,Arg3]).
 
 bs_put_utf16(Fail,Flags,Arg3) ->
-    emit_op(?BS_PUT_UTF16),
-    emit_(Fail), emit_(Flags), emit_(Arg3).
+    emit_instruction(bs_put_utf16,[Fail,Flags,Arg3]).
 
 bs_put_utf32(Fail,Flags,Arg3) ->
-    emit_op(?BS_PUT_UTF32),
-    emit_(Fail), emit_(Flags), emit_(Arg3).
+    emit_instruction(bs_put_utf32,[Fail,Flags,Arg3]).
 
 on_load() ->
-    emit_op(?ON_LOAD).
+    emit_instruction(on_load).
 
 recv_mark(F) ->
-    emit_op(?RECV_MARK),
-    emit_(F).
+    emit_instruction(recv_mark,[F]).
 
 recv_set(F) ->
-    emit_op(?RECV_SET),
-    emit_(F).
-    
-gc_bif3(Fail,Live,Bif,A1,A2,A3,Dst) ->
-    emit_op(?GC_BIF3),
-    emit_(Fail),emit_(Live),emit_({extfunc,erlang,Bif,3}),
-    emit_(A1),emit_(A2),emit_(A3),emit_(Dst).
+    emit_instruction(recv_set,[F]).
+
+gc_bif3(Fail,Live,ExtFunc={extfunc,erlang,_Bif,3},A1,A2,A3,Dst) ->
+    emit_instruction(gc_bif3,[Fail,Live,ExtFunc,A1,A2,A3,Dst]);
+gc_bif3(Fail,Live,Bif,A1,A2,A3,Dst) when is_atom(Bif) ->
+    emit_instruction(gc_bif3,[Fail,Live,{extfunc,erlang,Bif,3},A1,A2,A3,Dst]).
 
 line(Line) ->
     inc_num_lines(),
-    emit_op(?LLINE),
-    emit_L(Line).
+    emit_instruction(line,[Line]).
 
 put_map_assoc(A1,A2,A3,A4,A5) ->
-    emit_op(?PUT_MAP_ASSOC),
-    emit_(A1),emit_(A2),emit_(A3),emit_(A4),emit_(A5).
+    emit_instruction(put_map_assoc,[A1,A2,A3,A4,A5]).
 
 put_map_exact(A1,A2,A3,A4,A5) ->
-    emit_op(?PUT_MAP_EXACT),
-    emit_(A1),emit_(A2),emit_(A3),emit_(A4),emit_(A5).
+    emit_instruction(put_map_exact,[A1,A2,A3,A4,A5]).
 
 is_map(A1,A2) ->
-    emit_op(?IS_MAP),
-    emit_(A1),emit_(A2).
+    emit_instruction(is_map,[A1,A2]).
 
 has_map_fields(A1,A2,A3) ->
-    emit_op(?HAS_MAP_FIELDS),
-    emit_(A1),emit_(A2),emit_(A3).
+    emit_instruction(has_map_fields,[A1,A2,A3]).
 
 get_map_elements(A1,A2,A3) ->
-    emit_op(?GET_MAP_ELEMENTS),
-    emit_(A1),emit_(A2),emit_(A3).
+    emit_instruction(get_map_elements,[A1,A2,A3]).
 
 is_tagged_tuple(A1,A2,A3,A4) ->
-    emit_op(?IS_TAGGED_TUPLE),
-    emit_(A1),emit_(A2),emit_(A3),emit_(A4).
+    emit_instruction(is_tagged_tuple,[A1,A2,A3,A4]).
     
 build_stacktrace() ->
-    emit_op(?BUILD_STACKTRACE).
+    emit_instruction(build_stacktrace).
 
 raw_raise() ->
-    emit_op(?RAW_RAISE).
+    emit_instruction(raw_raise).
 
 get_hd(A1,A2) ->
-    emit_op(?GET_HD),
-    emit_(A1),emit_(A2).
+    emit_instruction(get_hd,[A1,A2]).
     
 get_tl(A1,A2) ->
-    emit_op(?GET_TL),
-    emit_(A1),emit_(A2).
+    emit_instruction(get_tl,[A1,A2]).
 
-put_tuple2(A1,A2) ->
-    emit_op(?PUT_TUPLE2),
-    emit_(A1),emit_(A2).
+put_tuple2(Dst,List) ->
+    emit_instruction(put_tuple2,[Dst,List]).
 
-bs_get_tail(A1,A2,A3) ->
-    emit_op(?BS_GET_TAIL),
-    emit_(A1),emit_(A2),emit_(A3).
+-spec bs_get_tail(Src::src(), Dst::dst(), Live::unsigned) -> ok.
+
+bs_get_tail(Src,Dst,Live) ->
+    emit_instruction(bs_get_tail,[Src,Dst,Live]).
 
 bs_start_match3(A1,A2,A3,A4) ->
-    emit_op(?BS_START_MATCH3),
-    emit_(A1),emit_(A2),emit_(A3),emit_(A4).
+    emit_instruction(bs_start_match3,[A1,A2,A3,A4]).
 
 bs_get_position(A1,A2,A3) ->
-    emit_op(?BS_GET_POSITION),
-    emit_(A1),emit_(A2),emit_(A3).
+    emit_instruction(bs_get_position,[A1,A2,A3]).
 
 bs_set_position(A1,A2) ->
-    emit_op(?BS_SET_POSITION),
-    emit_(A1),emit_(A2).
+    emit_instruction(bs_set_position,[A1,A2]).
 
 swap(A1,A2) ->
-    emit_op(?SWAP),
-    emit_(A1),emit_(A2).
+    emit_instruction(swap,[A1,A2]).
 
 bs_start_match4(A1,A2,A3,A4) ->
-    emit_op(?BS_START_MATCH4),
-    emit_(A1),emit_(A2),emit_(A3),emit_(A4).
+    emit_instruction(bs_start_match4,[A1,A2,A3,A4]).
 
 make_fun3(A1,A2,A3) ->
-    emit_op(?MAKE_FUN3),
-    emit_(A1),emit_(A2),emit_(A3).
+    emit_instruction(make_fun3,[A1,A2,A3]).
     
 init_yregs(A1) ->
-    emit_op(?INIT_YREGS),
-    emit_(A1).
+    emit_instruction(init_yregs,[A1]).
 
 recv_marker_bind(A1,A2) ->
-    emit_op(?RECV_MARKER_BIND),
-    emit_(A1), emit_(A2).
+    emit_instruction(recv_marker_bind,[A1,A2]).
 
 recv_marker_clear(A1) ->
-    emit_op(?RECV_MARKER_CLEAR),
-    emit_(A1).
+    emit_instruction(recv_marker_clear,[A1]).
     
 recv_marker_reserve(A1) ->
-    emit_op(?RECV_MARKER_RESERVE),
-    emit_(A1).
+    emit_instruction(recv_marker_reserve,[A1]).
 
 recv_marker_use(A1) ->
-    emit_op(?RECV_MARKER_USE),
-    emit_(A1).
+    emit_instruction(recv_marker_use,[A1]).
 
 bs_create_bin(Fail,Alloc,Unit,Dst,OpList) ->
     bs_create_bin(Fail,Alloc,live(),Unit,Dst,OpList).
-
 bs_create_bin(Fail,Alloc,Live,Unit,Dst,OpList) ->
-    emit_op(?BS_CREATE_BIN),
-    emit_F(Fail), emit_(Alloc), emit_(Live), 
-    emit_(Unit), emit_(Dst), emit_(OpList).
+    emit_instruction(bs_create_bin,[Fail,Alloc,Live,Unit,Dst,OpList]).
 
 call_fun2(Tag, Arity, Func) ->
-    emit_op(?CALL_FUN2),
-    emit_(Tag), emit_A(Arity), emit_(Func).
+    emit_instruction(call_fun2,[Tag,Arity,Func]).
 
 nif_start() ->
-    emit_op(?NIF_START).
+    emit_instruction(nif_start).
 
 badrecord(Value) ->
-    emit_op(?BADRECORD),
-    emit_(Value).
+    emit_instruction(badrecord,[Value]).
 
 %% Internal
 
@@ -1429,7 +1127,8 @@ jinit_() ->
 	     imports = #jctx_table{},
 	     exports = #jctx_table{},
 	     locals = #jctx_table{},
-	     lines = #jctx_table{index=1}
+	     lines = #jctx_table{index=1},
+	     strings = <<>>
 	    },
     jctx(Ctx),
     ok.
@@ -1441,29 +1140,72 @@ jterminate_() ->
     erase('JCTX'),
     Bin.
 
-emit_op(Opcode) when ?is_byte(Opcode) ->
-    ?verbose("opcode = ~p\n", [Opcode]),
-    Ctx = jctx(),
-    MaxOp = max(Ctx#jctx.max_op, Opcode),
-    jctx(Ctx#jctx { max_op = MaxOp }),
-    emit_data([Opcode]).
+emit_instruction(Mnemomic) ->
+    emit_data(encode_instruction(Mnemomic)).
+emit_instruction(Mnemomic, Args) ->
+    emit_data(encode_instruction(Mnemomic, Args)).
 
-emit_op(Opcode, Args) when ?is_byte(Opcode), is_list(Args) ->
-    Ctx = jctx(),
-    MaxOp = max(Ctx#jctx.max_op, Opcode),
-    jctx(Ctx#jctx { max_op = MaxOp }),
-    #opcode{argtypes=As} = maps:get(Opcode, opcode_map()),
-    emit_data([Opcode]),
-    emit_arglist(As, Args).
+emit_instruction_list(InstructionList) ->
+    [emit_instruction(Instr) || Instr <- InstructionList].
 
-emit_arglist([A|As], [Arg|Args]) ->
-    emit_arg(A, Arg),
-    emit_arglist(As, Args);
-emit_arglist([], []) ->
-    ok.
+encode_instruction(Mnemonic) when is_atom(Mnemonic) ->
+    Opcode = maps:get(Mnemonic, opcode_map()),
+    encode_instruction_(Opcode, []);
+encode_instruction(Instr) when is_tuple(Instr) ->
+    [Mnemonic|Args] = tuple_to_list(Instr),
+    encode_instruction(Mnemonic,Args).
 
-emit_arg(A, Arg) ->
-    case A of
+encode_instruction(Mnemonic,Args) ->
+    Opcode = maps:get(Mnemonic, opcode_map()),
+    encode_instruction_(Opcode, Args).
+
+encode_instruction_(Opcode, Args) when ?is_byte(Opcode), is_list(Args) ->
+    #opcode{mnemonic=M,argtypes=ArgTypes} = maps:get(Opcode, opcode_map()),
+    ?verbose("encode_instruction: ~p ~p ~p\n", [M,ArgTypes,Args]),
+    [Opcode|encode_arg_list(ArgTypes,Args)].
+
+%% emit_arg_list(ArgTypes, Args) ->
+%%     emit_data(encode_arg_list(ArgTypes, Args)).
+
+encode_arg_list(ArgTypes, Args) ->
+    encode_arg_list(ArgTypes, Args, [], []).
+    
+encode_arg_list([ArgType|ArgTypes], [Arg|Args], Stack, Acc) ->
+    encode_arg_list(ArgTypes,Args,
+		    [Arg|Stack],
+		    [encode_arg(ArgType,Arg,Stack)|Acc]);
+encode_arg_list([],[],_Stack,Acc) ->
+    lists:reverse(Acc).
+
+encode_arg(Type, Arg, Stack) ->
+    case Type of
+	s -> encode_s(Arg);
+	d -> encode_d(Arg);
+	u -> encode_u(Arg);
+	i -> encode_i(Arg);
+	r -> encode_x(Arg);  %% fixme check {x,0}
+	x -> encode_x(Arg);
+	y -> encode_y(Arg);
+	a -> encode_a(Arg);
+	j -> encode_j(Arg);
+	l -> encode_l(Arg);
+	dl -> encode_dl(Arg);
+	dlq -> encode_dlq(Arg);
+	st -> encode_st(Arg,Stack);
+	stb -> encode_stb(Arg,Stack);
+	k -> encode_k(Arg);
+	'S' -> encode_S(Arg);
+	'A' -> encode_A(Arg);
+	'F' -> encode_F(Arg);
+	'U' -> encode_u(Arg);
+	'G' -> encode_G(Arg);
+	'L' -> encode_L(Arg);
+	'R' -> encode_R(Arg);
+	'_' -> encode_(Arg)
+    end.
+
+emit_arg(Type, Arg) ->
+    case Type of
 	s -> emit_s(Arg);
 	d -> emit_d(Arg);
 	u -> emit_u(Arg);
@@ -1473,81 +1215,147 @@ emit_arg(A, Arg) ->
 	y -> emit_y(Arg);
 	a -> emit_a(Arg);
 	j -> emit_j(Arg);
-	fr -> emit_fr(Arg);
+	l -> emit_l(Arg);
+	k -> emit_k(Arg);
+	'S' -> emit_S(Arg);
 	'A' -> emit_A(Arg);
 	'F' -> emit_F(Arg);
 	'U' -> emit_u(Arg);
 	'G' -> emit_G(Arg);
 	'L' -> emit_L(Arg);
+	'R' -> emit_R(Arg);
 	'_' -> emit_(Arg)
-    end.    
-    
+    end.
+
+%% emit_arglist([A|As], [Arg|Args]) ->
+%%    emit_arg(A, Arg),
+%%    emit_arglist(As, Args);
+%% emit_arglist([], []) ->
+%%    ok.
+
+%% emit_arg(Type, Arg) ->
+%%    emit_data(encode_arg(Type,Arg)).
+
+emit_s(S) -> emit_data(encode_s(S)).
+emit_d(D) -> emit_data(encode_d(D)).
+emit_u(U) -> emit_data(encode_u(U)).
+emit_i(I) -> emit_data(encode_i(I)).
+emit_a(A) -> emit_data(encode_a(A)).
+emit_x(X) -> emit_data(encode_x(X)).
+emit_y(Y) -> emit_data(encode_y(Y)).
+emit_j(L) -> emit_data(encode_j(L)).
+emit_l(FR) -> emit_data(encode_l(FR)).
+emit_k(L)   -> emit_data(encode_k(L)).
+emit_S(S) -> emit_data(encode_S(S)).
+emit_F(MFA)  -> emit_data(encode_F(MFA)).
+emit_A(A) -> emit_data(encode_A(A)).
+emit_G(A) -> emit_data(encode_G(A)).
+emit_L(Line) -> emit_data(encode_L(Line)).
+emit_R(List) -> emit_data(encode_R(List)).    
+
 %% s = x|y|literal
-emit_s({x,X}) when ?is_reg(X) ->
-    emit_data(encode_ival(?X,X));
-emit_s({y,Y})  when ?is_reg(Y) ->
-    emit_data(encode_ival(?Y,Y));
-emit_s({literal,L}) ->
-    emit_data(encode_literal(L)).
+encode_s({x,X}) when ?is_reg(X) ->   encode_ival(?X,X);
+encode_s({y,Y})  when ?is_reg(Y) ->  encode_ival(?Y,Y);
+encode_s({atom,A}) -> encode_atom(A);
+encode_s({integer,I}) -> encode_i(I);
+encode_s({literal,L}) -> encode_literal(L);
+encode_s([]) -> encode_ival(?A, 0).
+
+%%encode_s({lit,L}) -> encode_lit(L).
 
 %% d = x|y
-emit_d({x,X}) when ?is_reg(X) ->
-    emit_data(encode_ival(?X,X));
-emit_d({y,Y})  when ?is_reg(Y) ->
-    emit_data(encode_ival(?Y,Y)).
+encode_d({x,X}) when ?is_reg(X) -> encode_ival(?X,X);
+encode_d({y,Y})  when ?is_reg(Y) -> encode_ival(?Y,Y).
 
-emit_u({u,U}) when is_integer(U), U >= 0 ->
-    emit_data(encode_ival(?U, U));
-emit_u(U)  when is_integer(U), U >= 0 -> %% {label,L}
-    emit_data(encode_ival(?U, U)).
+%% u = u (or raw unsigned integer)
+encode_u({u,U}) when is_integer(U), U >= 0 -> encode_ival(?U, U);
+encode_u(U)  when is_integer(U), U >= 0 -> encode_ival(?U, U).
 
-emit_i({i,I}) when is_integer(I) ->
-    emit_data(encode_ival(?I, I)).
+ %% i = i (or raw integer)
+encode_i({i,I}) when is_integer(I) -> encode_ival(?I, I);
+encode_i(I) when is_integer(I) -> encode_ival(?I, I).
 
-emit_a({atom,A}) when is_atom(A) ->
-    emit_data(encode_atom(A));
-emit_a({a,I}) when is_integer(I), I >= 1 ->
-    emit_data(encode_ival(?A, I)).
+%% a = a|{atom,A}|atom
+encode_a({atom,A}) when is_atom(A) -> encode_atom(A);
+encode_a({a,I}) when is_integer(I), I >= 1 -> encode_ival(?A, I);
+encode_a(A) when is_atom(A) ->    encode_atom(A).
 
-emit_x({x,X}) when ?is_reg(X) ->
-    emit_data(encode_ival(?X,X)).
+encode_x({x,X}) when ?is_reg(X) -> encode_ival(?X,X).
+encode_y({y,Y})  when ?is_reg(Y) -> encode_ival(?Y,Y).
+encode_j({f,F}) -> encode_ival(?F,F).   %% j = jump target label
+encode_l({fr,FR}) ->
+    iolist_to_binary([encode_ival(?Z, ?FR),
+		      encode_ival(?U, FR)]).
 
-emit_y({y,Y})  when ?is_reg(Y) ->
-    emit_data(encode_ival(?Y,Y)).
+%% dl=d|l
+encode_dl(Arg={fr,_}) -> encode_l(Arg);  %% floating point register
+encode_dl(Arg) -> encode_d(Arg).
 
-emit_j({f,F}) ->
-    emit_data(encode_ival(?F,F)).
+%% dlq=d|l|q
+encode_dlq(Arg={fr,_}) -> encode_l(Arg);  %% floating point register
+encode_dlq({literal,Arg}) -> encode_literal(Arg);  %% floating point register
+encode_dlq(Arg) -> encode_d(Arg).
 
-emit_fr(Arg={fr,_}) ->
-    emit_data(encode_(Arg)).
+encode_st({string,Str0}, Stack=[Len|_]) ->
+    <<Str:Len/binary,_/binary>> = Str0, %% trim if needed
+    %% find Str among strings
+    Ctx = jctx(),
+    Strings = Ctx#jctx.strings,
+    case binary:match(Str, Strings) of
+	nomatch ->
+	    Strings1 = <<Strings/binary, Str/binary>>,
+	    jctx(Ctx#jctx{strings=Strings1}),
+	    Offs = byte_size(Strings),
+	    encode_ival(?U,Offs);
+	{Offs,_Len} ->
+	    encode_ival(?U,Offs)
+    end.
 
-emit_F(Arg) ->
-    emit_data(encode_import(Arg)).
+%% fixme find bitstring....?
+encode_stb({string,Str0}, [Bits|_]) ->
+    Len = (Bits+7) div 8,
+    <<Str:Len/binary,_/binary>> = Str0, %% trim if needed
+    %% find Str among strings
+    Ctx = jctx(),
+    Strings = Ctx#jctx.strings,
+    case binary:match(Str, Strings) of
+	nomatch ->
+	    Strings1 = <<Strings/binary, Str/binary>>,
+	    jctx(Ctx#jctx{strings=Strings1}),
+	    Offs = byte_size(Strings),
+	    encode_ival(?U,Offs);
+	{Offs,_Len} ->
+	    encode_ival(?U,Offs)
+    end.
 
-emit_A({u,A}) when A >= 0 -> %% arity value
-    emit_data(encode_ival(?U, A));
-emit_A(A) when is_integer(A), A>=0 ->
-    emit_data(encode_ival(?U, A)).
+encode_S({x,X}) when ?is_reg(X) ->   encode_ival(?X,X);
+encode_S({y,Y})  when ?is_reg(Y) ->  encode_ival(?Y,Y).
 
-emit_G({u,U}) when is_integer(U) ->
-    emit_data(encode_ival(?U, U));
-emit_G(Flags) when is_list(Flags) ->
-    U = encode_bit_flags(Flags),
-    emit_data(encode_ival(?U, U)).
+encode_F(Arg) -> encode_import(Arg).
 
-emit_L([]) ->
-    emit_data(encode_ival(?U, 0));
-emit_L(Line=[{location,_Fname,_Ln}]) ->
-    emit_data(encode_line(Line)).
+%% arity value
+encode_A({u,A}) when A >= 0 ->   encode_ival(?U, A);
+encode_A(A) when is_integer(A), A>=0 -> encode_ival(?U, A).
 
-emit_R(List) ->
-    emit_data(encode_R(List)).
+%% bit syntax flags encoded as u-tag
+encode_G({u,U}) when is_integer(U) ->  encode_ival(?U, U);
+encode_G(Flags) when is_list(Flags) ->
+    encode_ival(?U, encode_bit_flags(Flags)).
+    
+encode_L([]) -> encode_ival(?U, 0);
+encode_L(Line=[{location,_Fname,_Ln}]) -> encode_line(Line).
 
-encode_R({list,L}) ->
-    encode_R(L);
+encode_R({list,L}) -> encode_R(L);
 encode_R(L) when is_list(L) ->
     {N,Data} = encode_list(L),
     iolist_to_binary([encode_ival(?Z, ?LIST),
+		      encode_ival(?U, N),
+		      Data]).
+
+encode_lit(Lit) ->
+    Data = term_to_binary(Lit),
+    N = byte_size(Data),
+    iolist_to_binary([encode_ival(?Z, ?LITERAL),
 		      encode_ival(?U, N),
 		      Data]).
 
@@ -1555,7 +1363,7 @@ encode_bit_flags([little|Fs]) ->
     ?BIT_LITTLE bor encode_bit_flags(Fs);
 encode_bit_flags([big|Fs]) ->
     ?BIT_BIG bor encode_bit_flags(Fs);
-encode_bit_flags([nativ|Fs]) ->
+encode_bit_flags([native|Fs]) ->
     ?BIT_NATIVE bor encode_bit_flags(Fs);
 encode_bit_flags([signed|Fs]) ->
     ?BIT_SIGNED bor encode_bit_flags(Fs);
@@ -1596,25 +1404,20 @@ encode_({x,I})   -> encode_ival(?X, I);
 encode_({y,I})   -> encode_ival(?Y, I);
 encode_({f,I})   -> encode_ival(?F, I);
 encode_({h,I})   -> encode_ival(?H, I);
-encode_({fr,R})  ->
-    iolist_to_binary([encode_ival(?Z, ?FR),
-		      encode_ival(?U, R)]);
+encode_(FR={fr,_})  -> encode_l(FR);
+encode_({atom,A}) when is_atom(A) -> encode_atom(A);
 encode_({list,L}) ->
     {N,Data} = encode_list(L),
     iolist_to_binary([encode_ival(?Z, ?LIST),
 		      encode_ival(?U, N),
 		      Data]);
 encode_({alloc,L}) ->
-    {N,Data} = encode_alloc_list(L),
-    iolist_to_binary([encode_ival(?Z, ?ALLOC),
-		      encode_ival(?U, N),
-		      Data]);
+    encode_k(L);
+
 encode_({literal,L}) -> %% inline literal
-    Data = term_to_binary(L),
-    N = byte_size(Data),
+    U = insert_literal(L),    
     iolist_to_binary([encode_ival(?Z, ?LITERAL),
-		      encode_ival(?U, N),
-		      Data]);
+		      encode_ival(?U, U)]);
 encode_({extfunc,M,F,A}) -> 
     encode_import(M,F,A);
 encode_(Line=[{location,_Filename,_Line}]) ->
@@ -1645,6 +1448,15 @@ encode_list([H|T], N, Acc) ->
 encode_list([], N, Acc) ->
     {N, lists:reverse(Acc)}.
 
+encode_k({alloc,List}) ->
+    {N,Data} = encode_alloc_list(List),
+    iolist_to_binary([encode_ival(?Z, ?ALLOC),
+		      encode_ival(?U, N),
+		      Data]);
+encode_k(U) when is_integer(U), U >= 0 -> 
+    encode_u(U).
+
+
 encode_alloc_list(List) when is_list(List) ->
     encode_alloc_list(List, 0, []).
 
@@ -1672,8 +1484,14 @@ decode(<<?ALLOC:4,0:1,?Z:3, Bin/binary>>) ->
     {List,Bin2} = decode_alloc_list(N, Bin1),
     {{alloc,List}, Bin2};
 decode(<<?LITERAL:4,0:1,?Z:3, Bin/binary>>) ->
-    {{u,N},Bin1} = decode_ival(Bin),
-    {decode_literal(N),Bin1};
+    {{u,U},Bin1} = decode_ival(Bin),
+    {decode_literal(U),Bin1};
+    %% case decode_ival(Bin) of
+    %% 	{{u,0},Bin1} -> {{lit,<<>>},Bin1};
+    %% 	{{u,N},Bin1} ->
+    %% 	    <<Data:N/binary,Bin2/binary>> = Bin1,
+    %% 	    {{lit,binary_to_term(Data)},Bin2}
+    %% end;
 decode(<<?FR:4,0:1,?Z:3, Bin/binary>>) ->
     {{u,R},Bin1} = decode(Bin),
     {{fr,R}, Bin1};
@@ -1814,6 +1632,8 @@ decode_arglist([T|Ts], Bin, Acc) ->
 		    decode_arglist(Ts,Bin1,[[] | Acc]);
 		{L={literal,_},Bin1} ->
 		    decode_arglist(Ts,Bin1,[L | Acc]);
+		{{u,U},Bin1} ->
+		    decode_arglist(Ts,Bin1,[decode_literal(U)|Acc]);
 		{{a,A},Bin1} ->
 		    decode_arglist(Ts,Bin1,[decode_atom(A) | Acc]);
 		{A={atom,_},Bin1} ->
@@ -1830,7 +1650,40 @@ decode_arglist([T|Ts], Bin, Acc) ->
 		{Y={y,_},Bin1} ->
 		    decode_arglist(Ts,Bin1,[Y | Acc])
 	    end;
-	fr ->
+	dl ->
+	    case decode(Bin) of
+		{X={x,_},Bin1} ->
+		    decode_arglist(Ts,Bin1,[X | Acc]);
+		{Y={y,_},Bin1} ->
+		    decode_arglist(Ts,Bin1,[Y | Acc]);
+		{FR={fr,_},Bin1} ->
+		    decode_arglist(Ts,Bin1,[FR | Acc])
+	    end;
+	dlq ->
+	    case decode(Bin) of
+		{X={x,_},Bin1} ->
+		    decode_arglist(Ts,Bin1,[X | Acc]);
+		{Y={y,_},Bin1} ->
+		    decode_arglist(Ts,Bin1,[Y | Acc]);
+		{FR={fr,_},Bin1} ->
+		    decode_arglist(Ts,Bin1,[FR | Acc]);
+		{_Q={u,U},Bin1} ->
+		    decode_arglist(Ts,Bin1,[decode_literal(U)|Acc]);
+		{Q={literal,_},Bin1} ->
+		    decode_arglist(Ts,Bin1,[Q|Acc])
+	    end;
+	st ->
+	    {{u,Offs},Bin1} = decode(Bin),
+	    [Len|_] = Acc, %% assume length in previous argument
+	    <<_:Offs/binary,Str:Len/binary,_/binary>> = (jctx())#jctx.strings,
+	    decode_arglist(Ts,Bin1,[{string,Str}|Acc]);
+	stb ->
+	    {{u,Offs},Bin1} = decode(Bin),
+	    [Bits|_] = Acc, %% assume bit-length in previous argument
+	    Len = (Bits+7) div 8,
+	    <<_:Offs/binary,Str:Len/binary,_/binary>> = (jctx())#jctx.strings,
+	    decode_arglist(Ts,Bin1,[{string,Str}|Acc]);
+	l ->
 	    {FR={fr,_},Bin1} = decode(Bin),
 	    decode_arglist(Ts,Bin1,[FR | Acc]);
 	'_' ->
@@ -1912,6 +1765,7 @@ load_chunk(<<"Code">>,<<SubSize:32,Chunk/binary>>, Acc) ->
     [{code,CodeInfo, Code}|Acc];
 
 load_chunk(<<"StrT">>, <<Strings/binary>>, Acc) ->
+    jctx((jctx())#jctx { strings = Strings }),
     [{strings,binary_to_list(Strings)} | Acc];
 
 load_chunk(<<"Attr">>, TermBin, Acc) ->
@@ -2029,16 +1883,21 @@ build_module() ->
     beamjit_file:close(Fd),
     Mod.
 
+print_file(Filename) ->
+    jinit_(),    
+    Loaded = beamjit_file:fold_chunks(Filename, fun load_chunk/3, []),
+    Resolved = resolve_chunks(Loaded, []),
+    print_chunks(Resolved),
+    jterminate_(),
+    ok.
 
-print_chunks({ok,Chunks}) ->
-    print_chunks(Chunks);
 print_chunks([{code,Opts,InstrList}|Chunks]) ->
     io:format("*** CODE ***\n"),
     print_functions(InstrList),
     io:format("*** CODEINFO ***\n"),
     lists:foreach(
       fun({K,V}) ->
-	      io:format("  ~w: ~p\n", [K,V])
+	      io:format("  ~w: ~w\n", [K,V])
       end, Opts),
     print_chunks(Chunks);
 print_chunks([_|Chunks]) ->
@@ -2059,15 +1918,56 @@ print_functions([C|Cs]) ->
 print_functions([]) ->
     ok.
 
+%% Test that all instructions are encoded/decoded correctly
+test_file(Filename) ->
+    jinit_(),    
+    Loaded = beamjit_file:fold_chunks(Filename, fun load_chunk/3, []),
+    Resolved = resolve_chunks(Loaded, []),
+    test_chunks(Resolved),
+    jterminate_(),
+    ok.
+
+test_chunks([{code,_Info,InstructionList}|Chunks]) ->
+    lists:foreach(
+      fun(Instr) ->
+	      IoList1 = [Opcode|_] = encode_instruction(Instr),
+	      Data1 = iolist_to_binary(IoList1),
+	      [Mnemonic|Args] = 
+		  if is_atom(Instr) ->
+			  [Instr];
+		     is_tuple(Instr) ->
+			  tuple_to_list(Instr)
+		  end,
+	      io:format("TEST mnemonic=~p, Args=~p\n", [Mnemonic, Args]),
+	      file:position((jctx())#jctx.fd, 0),
+	      file:truncate((jctx())#jctx.fd),
+	      ok = apply(?MODULE,Mnemonic,Args),
+	      {ok,Data2} = ram_file:get_file((jctx())#jctx.fd),
+	      %% ?verbose("  Encoding1 = ~p\n", [Data1]),
+	      %% ?verbose("  Encoding2 = ~p\n", [Data2]),
+	      case {decode_instruction(Data1),
+		    decode_instruction(Data2)} of
+		  {{Opcode,Instr,<<>>},{Opcode,Instr,<<>>}} -> ok
+	      end
+      end, InstructionList),
+    test_chunks(Chunks);
+test_chunks([_|Chunks]) ->
+    test_chunks(Chunks);
+test_chunks([]) ->
+    [].
+
 %% pass2 resolve code and reverse all chunks 
 resolve_chunks([{code,Info,Code}|Chunks], Acc) ->
-    {Asm,OpRangeSet} = decode_opcodes(Code),
+    {Asm,NL,OpRangeSet} = decode_instruction_list(Code),
+    set_num_lines(NL),
     All = gb_sets:from_list(lists:seq(1,?MAX_OP_CODE)),
     OpRangeNotUsed0 = gb_sets:difference(All,OpRangeSet),
     OpRangeNotUsed  = gb_sets:difference(OpRangeNotUsed0, obsolete()),
+    OpCodeMaxUsed = gb_sets:largest(OpRangeSet),
     Info1 = [{opcode_range_num,gb_sets:size(OpRangeSet)},
 	     {opcode_range_set,gb_sets_to_range_list(OpRangeSet)},
-	     {opcode_range_not_used,gb_sets_to_range_list(OpRangeNotUsed)}
+	     {opcode_range_not_used,gb_sets_to_range_list(OpRangeNotUsed)},
+	     {opcode_max_used, OpCodeMaxUsed}
 	    | Info],
     resolve_chunks(Chunks, [{code,Info1,Asm}|Acc]);
 resolve_chunks([Chunk|Chunks], Acc) ->
@@ -2509,37 +2409,47 @@ parse_code_info(<<Instructionset:32/integer,
 	  _ -> [{newinfo, Rest}]
       end].
 
-decode_opcodes(Binary) ->
-    decode_opcodes(Binary, gb_sets:new(), []).
+decode_instruction_list(Bin) when is_binary(Bin) ->
+    decode_instruction_list(Bin, gb_sets:new(), 0, []).
 
-decode_opcodes(<<?INT_CODE_END, _Bin/binary>>, OpSet, Acc) ->
-    %% ?verbose("trail bin=~p\n", [_Bin]),
-    {lists:reverse(Acc), gb_sets:add_element(?INT_CODE_END, OpSet)};
-decode_opcodes(<<Opcode,Bin/binary>>, OpSet, Acc) ->
-    #opcode{mnemonic=Mnemonic,argtypes=As} = maps:get(Opcode, opcode_map()),
-    ?verbose("opcode ~p, argtypes~p\n", [Mnemonic, As]),
-    case decode_arglist(As,Bin) of
+decode_instruction_list(<<>>, OpSet, NLn, Acc) ->
+    {lists:reverse(Acc), NLn, OpSet};
+decode_instruction_list(Bin, OpSet, NLn, Acc) ->
+    {Opcode,Instr,Bin1} = decode_instruction(Bin),
+    ?verbose("opcode ~p, instruction=~p\n", [Opcode,Instr]),
+    case Instr of
+	{line,_} ->
+	    decode_instruction_list(Bin1, gb_sets:add_element(Opcode, OpSet),
+				    NLn+1, [Instr|Acc]);
+	int_code_end ->
+	    OpSet1 = gb_sets:add_element(Opcode, OpSet),
+	    {lists:reverse(Acc), NLn, OpSet1};
+	_ ->
+	    decode_instruction_list(Bin1, gb_sets:add_element(Opcode, OpSet),
+				    NLn, [Instr|Acc])
+    end.
+
+decode_instruction(<<Opcode,Bin/binary>>) ->
+    #opcode{mnemonic=Mnemonic,argtypes=ArgTypes} = 
+	maps:get(Opcode, opcode_map()),
+    case decode_arglist(ArgTypes,Bin) of
 	{[],Bin1} ->
-	    decode_opcodes(Bin1, gb_sets:add_element(Opcode, OpSet),
-			   [Mnemonic | Acc]);
+	    {Opcode,Mnemonic,Bin1};
 	{Args,Bin1} ->
-	    ?verbose(" ~p\n", [Args]),
-	    if Opcode =:= ?LLINE ->
-		    inc_num_lines();
-	       true ->
-		    ok
-	    end,
-	    decode_opcodes(Bin1,gb_sets:add_element(Opcode,OpSet),
-			   [list_to_tuple([Mnemonic|Args]) | Acc])
-    end;
-decode_opcodes(<<>>, OpSet, Acc) ->
-    {lists:reverse(Acc), OpSet}.
+	    {Opcode,list_to_tuple([Mnemonic|Args]),Bin1}
+    end.
+
 
 inc_num_lines() ->
     Ctx = jctx(),
-    NL = Ctx#jctx.num_lines + 1,
+    set_num_lines(Ctx,Ctx#jctx.num_lines + 1).
+
+set_num_lines(NL) ->
+    set_num_lines(jctx(),NL).
+set_num_lines(Ctx,NL) ->
     jctx(Ctx#jctx{num_lines=NL}),
     ok.
+
 
 -spec opcode_map() -> #{ integer() => #opcode{},
 			 atom() => op() }.
@@ -2573,188 +2483,369 @@ inc_num_lines() ->
 	(Mnemonic) => (Op)).
 
 
+-define(LABEL, 1).
+-define(FUNC_INFO, 2).
+-define(INT_CODE_END, 3).
+-define(CALL, 4).
+-define(CALL_LAST, 5).
+-define(CALL_ONLY, 6).
+-define(CALL_EXT, 7).
+-define(CALL_EXT_LAST, 8).
+-define(BIF0, 9).
+-define(BIF1, 10).
+-define(BIF2, 11).
+-define(ALLOCATE, 12).
+-define(ALLOCATE_HEAP, 13).
+-define(ALLOCATE_ZERO, 14).
+-define(ALLOCATE_HEAP_ZERO, 15).
+-define(TEST_HEAP, 16).
+-define(INIT, 17).
+-define(DEALLOCATE, 18).
+-define(RETURN, 19).
+-define(SEND, 20).
+-define(REMOVE_MESSAGE, 21).
+-define(TIMEOUT, 22).
+-define(LOOP_REC, 23).
+-define(LOOP_REC_END, 24).
+-define(WAIT, 25).
+-define(WAIT_TIMEOUT, 26).
+-define(M_PLUS, 27).
+-define(M_MINUS, 28).
+-define(M_TIMES, 29).
+-define(M_DIV, 30).
+-define(INT_DIV, 31).
+-define(INT_REM, 32).
+-define(INT_BAND, 33).
+-define(INT_BOR, 34).
+-define(INT_BXOR, 35).
+-define(INT_BSL, 36).
+-define(INT_BSR, 37).
+-define(INT_BNOT, 38).
+-define(IS_LT, 39).
+-define(IS_GE, 40).
+-define(IS_EQ, 41).
+-define(IS_NE, 42).
+-define(IS_EQ_EXACT, 43).
+-define(IS_NE_EXACT, 44).
+-define(IS_INTEGER, 45).
+-define(IS_FLOAT, 46).
+-define(IS_NUMBER, 47).
+-define(IS_ATOM, 48).
+-define(IS_PID, 49).
+-define(IS_REFERENCE, 50).
+-define(IS_PORT, 51).
+-define(IS_NIL, 52).
+-define(IS_BINARY, 53).
+-define(IS_CONSTANT, 54).
+-define(IS_LIST, 55).
+-define(IS_NONEMPTY_LIST, 56).
+-define(IS_TUPLE, 57).
+-define(TEST_ARITY, 58).
+-define(SELECT_VAL, 59).
+-define(SELECT_TUPLE_ARITY, 60).
+-define(JUMP, 61).
+-define(CATCH, 62).
+-define(CATCH_END, 63).
+-define(MOVE, 64).
+-define(GET_LIST, 65).
+-define(GET_TUPLE_ELEMENT, 66).
+-define(SET_TUPLE_ELEMENT, 67).
+-define(PUT_STRING, 68).
+-define(PUT_LIST, 69).
+-define(PUT_TUPLE, 70).
+-define(PUT, 71).
+-define(BADMATCH, 72).
+-define(IF_END, 73).
+-define(CASE_END, 74).
+-define(CALL_FUN, 75).
+-define(MAKE_FUN, 76).
+-define(IS_FUNCTION, 77).
+-define(CALL_EXT_ONLY, 78).
+-define(BS_START_MATCH, 79).
+-define(BS_GET_INTEGER, 80).
+-define(BS_GET_FLOAT, 81).
+-define(BS_GET_BINARY, 82).
+-define(BS_SKIP_BITS, 83).
+-define(BS_TEST_TAIL, 84).
+-define(BS_SAVE, 85).
+-define(BS_RESTORE, 86).
+-define(BS_INIT, 87).
+-define(BS_FINAL, 88).
+-define(BS_PUT_INTEGER, 89).
+-define(BS_PUT_BINARY, 90).
+-define(BS_PUT_FLOAT, 91).
+-define(BS_PUT_STRING, 92).
+-define(BS_NEED_BUF, 93).
+-define(FCLEARERROR, 94).
+-define(FCHECKERROR, 95).
+-define(FMOVE, 96).
+-define(FCONV, 97).
+-define(FADD, 98).
+-define(FSUB, 99).
+-define(FMUL, 100).
+-define(FDIV, 101).
+-define(FNEGATE, 102).
+-define(MAKE_FUN2, 103).
+-define(TRY, 104).
+-define(TRY_END, 105).
+-define(TRY_CASE, 106).
+-define(TRY_CASE_END, 107).
+-define(RAISE, 108).
+-define(BS_INIT2, 109).
+-define(BS_BITS_TO_BYTES, 110).
+-define(BS_ADD, 111).
+-define(APPLY, 112).
+-define(APPLY_LAST, 113).
+-define(IS_BOOLEAN, 114).
+-define(IS_FUNCTION2, 115).
+-define(BS_START_MATCH2, 116).
+-define(BS_GET_INTEGER2, 117).
+-define(BS_GET_FLOAT2, 118).
+-define(BS_GET_BINARY2, 119).
+-define(BS_SKIP_BITS2, 120).
+-define(BS_TEST_TAIL2, 121).
+-define(BS_SAVE2, 122).
+-define(BS_RESTORE2, 123).
+-define(GC_BIF1, 124).
+-define(GC_BIF2, 125).
+-define(BS_FINAL2, 126).
+-define(BS_BITS_TO_BYTES2, 127).
+-define(PUT_LITERAL, 128).
+-define(IS_BITSTR, 129).
+-define(BS_CONTEXT_TO_BINARY, 130).
+-define(BS_TEST_UNIT, 131).
+-define(BS_MATCH_STRING, 132).
+-define(BS_INIT_WRITABLE, 133).
+-define(BS_APPEND, 134).
+-define(BS_PRIVATE_APPEND, 135).
+-define(TRIM, 136).
+-define(BS_INIT_BITS, 137).
+-define(BS_GET_UTF8, 138).
+-define(BS_SKIP_UTF8, 139).
+-define(BS_GET_UTF16, 140).
+-define(BS_SKIP_UTF16, 141).
+-define(BS_GET_UTF32, 142).
+-define(BS_SKIP_UTF32, 143).
+-define(BS_UTF8_SIZE, 144).
+-define(BS_PUT_UTF8, 145).
+-define(BS_UTF16_SIZE, 146).
+-define(BS_PUT_UTF16, 147).
+-define(BS_PUT_UTF32, 148).
+-define(ON_LOAD, 149).
+-define(RECV_MARK, 150).
+-define(RECV_SET, 151).
+-define(GC_BIF3, 152).
+-define(LLINE, 153).
+-define(PUT_MAP_ASSOC, 154).
+-define(PUT_MAP_EXACT, 155).
+-define(IS_MAP, 156).
+-define(HAS_MAP_FIELDS, 157).
+-define(GET_MAP_ELEMENTS, 158).
+-define(IS_TAGGED_TUPLE, 159).
+-define(BUILD_STACKTRACE, 160).
+-define(RAW_RAISE, 161).
+-define(GET_HD, 162).
+-define(GET_TL, 163).
+-define(PUT_TUPLE2, 164).
+-define(BS_GET_TAIL, 165).
+-define(BS_START_MATCH3, 166).
+-define(BS_GET_POSITION, 167).
+-define(BS_SET_POSITION, 168).
+-define(SWAP, 169).
+-define(BS_START_MATCH4, 170).
+-define(MAKE_FUN3, 171).
+-define(INIT_YREGS, 172).
+-define(RECV_MARKER_BIND, 173).
+-define(RECV_MARKER_CLEAR, 174).
+-define(RECV_MARKER_RESERVE, 175).
+-define(RECV_MARKER_USE, 176).
+-define(BS_CREATE_BIN, 177).
+-define(CALL_FUN2, 178).
+-define(NIF_START, 179).
+-define(BADRECORD, 180).
+
 opcode_map() ->
 #{
-?OPENT(1,label,['U']),
-?OPENT(2,func_info,[a,a,'U']),
-?OPENT(3,int_code_end,[]),
-?OPENT(4,call,['A',j]),
-?OPENT(5,call_last,['A',j,'U']),
-?OPENT(6,call_only,['A',j]),
-?OPENT(7,call_ext,['A','F']),
-?OPENT(8,call_ext_last,['A','F','U']),
-?OPENT(9,bif0,['F','_']),
-?OPENT(10,bif1,[j,'F','_','_']),
-?OPENT(11,bif2,[j,'F','_','_','_']),
-?OPENT(12,allocate,['U','U']),
-?OPENT(13,allocate_heap,['U',k,'U']),
-?OPENT(14,allocate_zero,['U','U'], ?DEFAULT_VSN, ?OTP_24),
-?OPENT(15,allocate_heap_zero,['U','U','U'], ?DEFAULT_VSN, ?OTP_24),
-?OPENT(16,test_heap,[k,'U']),
-?OPENT(17,init,['_'], ?DEFAULT_VSN, ?OTP_24),
-?OPENT(18,deallocate,['U']),
-?OPENT(19,return,[]),
-?OPENT(20,send,[]),
-?OPENT(21,remove_message,[]),
-?OPENT(22,timeout,[]),
-?OPENT(23,loop_rec,[j,d]),
-?OPENT(24,loop_rec_end,[j]),
-?OPENT(25,wait,[j]),
-?OPENT(26,wait_timeout,[j,s]),
-?OPENT(27,m_plus,[j,s,s,d],?DEFAULT_VSN,?OTP_R13B_03),
-?OPENT(28,m_minus,[j,s,s,d],?DEFAULT_VSN,?OTP_R13B_03),
-?OPENT(29,m_times,[j,s,s,d],?DEFAULT_VSN,?OTP_R13B_03),
-?OPENT(30,m_div,[j,s,s,d],?DEFAULT_VSN,?OTP_R13B_03),
-?OPENT(31,int_div,[j,s,s,d],?DEFAULT_VSN,?OTP_R13B_03),
-?OPENT(32,int_rem,[j,s,s,d],?DEFAULT_VSN,?OTP_R13B_03),
-?OPENT(33,int_band,[j,s,s,d],?DEFAULT_VSN,?OTP_R13B_03),
-?OPENT(34,int_bor,[j,s,s,d],?DEFAULT_VSN,?OTP_R13B_03),
-?OPENT(35,int_bxor,[j,s,s,d],?DEFAULT_VSN,?OTP_R13B_03),
-?OPENT(36,int_bsl,[j,s,s,d],?DEFAULT_VSN,?OTP_R13B_03),
-?OPENT(37,int_bsr,[j,s,s,d],?DEFAULT_VSN,?OTP_R13B_03),
-?OPENT(38,int_bnot,[j,s,d],?DEFAULT_VSN,?OTP_R13B_03),
-?OPENT(39,is_lt,[j,s,s]),
-?OPENT(40,is_ge,[j,s,s]),
-?OPENT(41,is_eq,[j,s,s]),
-?OPENT(42,is_ne,[j,s,s]),
-?OPENT(43,is_eq_exact,[j,s,s]),
-?OPENT(44,is_ne_exact,[j,s,s]),
-?OPENT(45,is_integer,[j,s]),
-?OPENT(46,is_float,[j,s]),
-?OPENT(47,is_number,[j,s]),
-?OPENT(48,is_atom,[j,s]),
-?OPENT(49,is_pid,[j,s]),
-?OPENT(50,is_reference,[j,s]),
-?OPENT(51,is_port,[j,s]),
-?OPENT(52,is_nil,[j,s]),
-?OPENT(53,is_binary,[j,s]),
-?OPENT(54,is_constant,[j,s], ?OTP_R4, ?OTP_R13B_03),
-?OPENT(55,is_list,[j,s]),
-?OPENT(56,is_nonempty_list,[j,s]),
-?OPENT(57,is_tuple,[j,s]),
-?OPENT(58,test_arity,[j,s,'A']),
-?OPENT(59,select_val,[s,j,'R']),
-?OPENT(60,select_tuple_arity,[s,j,'R']),
-?OPENT(61,jump,['_']),
-?OPENT(62,'catch',['_','_']),
-?OPENT(63,catch_end,['_']),
-?OPENT(64,move,[s,d]),
-?OPENT(65,get_list,['_','_','_']),
-?OPENT(66,get_tuple_element,['_','_','_']),
-?OPENT(67,set_tuple_element,['_','_','_']),
-?OPENT(68,put_string,['_','_','_'],?DEFAULT_VSN,?OTP_R13B_03),
-?OPENT(69,put_list,['_','_','_']),
-?OPENT(70,put_tuple,['_','_'],?DEFAULT_VSN,?OTP_22),
-?OPENT(71,put,['_'],?DEFAULT_VSN,?OTP_22),
-?OPENT(72,badmatch,['_']),
-?OPENT(73,if_end,[]),
-?OPENT(74,case_end,['_']),
-?OPENT(75,call_fun,['_']),
-?OPENT(76,make_fun,['_','_','_'],?DEFAULT_VSN,?OTP_R13B_03),
-?OPENT(77,is_function,['_','_']),
-?OPENT(78,call_ext_only,['A','F'],?OTP_R5, ?OTP_R13B_03),
-?OPENT(79,bs_start_match,['_','_'],?OTP_R7, ?OTP_R13B_03),
-?OPENT(80,bs_get_integer,['_','_'],?OTP_R7, ?OTP_R13B_03),
-?OPENT(81,bs_get_float,['_','_'],?OTP_R7, ?OTP_R13B_03),
-?OPENT(82,bs_get_binary,['_','_'],?OTP_R7, ?OTP_R13B_03),
-?OPENT(83,bs_skip_bits,['_','_'],?OTP_R7, ?OTP_R13B_03),
-?OPENT(84,bs_test_tail,['_','_'],?OTP_R7, ?OTP_R13B_03),
-?OPENT(85,bs_save,['_'],?OTP_R7, ?OTP_R13B_03),
-?OPENT(86,bs_restore,['_'],?OTP_R7, ?OTP_R13B_03),
-?OPENT(87,bs_init,['_','_'],?OTP_R7A, ?OTP_R13B_03),
-?OPENT(88,bs_final,['_','_'],?OTP_R7A, ?OTP_R13B_03),
-?OPENT(89,bs_put_integer,['_','_','_','G','_'],?OTP_R7A, ?OTP_R13B_03),
-?OPENT(90,bs_put_binary,['_','_','_','G','_'],?OTP_R7A, ?OTP_R13B_03),
-?OPENT(91,bs_put_float,['_','_','_','G','_'],?OTP_R7A, ?OTP_R13B_03),
-?OPENT(92,bs_put_string,['_','_'],?OTP_R7A, ?OTP_R13B_03),
-?OPENT(93,bs_need_buf,['_'],?OTP_R7B, ?OTP_R13B_03),
-?OPENT(94,fclearerror,[],?OTP_R8,?OTP_24),
-?OPENT(95,fcheckerror,['_'],?OTP_R8,?OTP_24),
-?OPENT(96,fmove,['_','_'],?OTP_R8),
-?OPENT(97,fconv,['_','_'],?OTP_R8),
-?OPENT(98,fadd,[j,fr,fr,fr],?OTP_R8),
-?OPENT(99,fsub,[j,fr,fr,fr],?OTP_R8),
-?OPENT(100,fmul,[j,fr,fr,fr],?OTP_R8),
-?OPENT(101,fdiv,[j,fr,fr,fr],?OTP_R8),
-?OPENT(102,fnegate,[j,fr,fr],?OTP_R8),
-?OPENT(103,make_fun2,[],?OTP_R8,?OTP_24),
-?OPENT(104,'try',['_','_'],?OTP_R10B),
-?OPENT(105,try_end,['_'],?OTP_R10B),
-?OPENT(106,try_case,['_'],?OTP_R10B),
-?OPENT(107,try_case_end,['_'],?OTP_R10B),
-?OPENT(108,raise,['_','_'],?OTP_R10B),
-?OPENT(109,bs_init2,['_','_','_','_','G','_'],?OTP_R10B),
-?OPENT(110,bs_bits_to_bytes,['_','_','_'],?OTP_R10B, ?OTP_R13B_03),
-?OPENT(111,bs_add,['_','_','_','_','_'],?OTP_R10B),
-?OPENT(112,apply,['_'],?OTP_R10B),
-?OPENT(113,apply_last,['_','_'],?OTP_R10B),
-?OPENT(114,is_boolean,['_','_'],?OTP_R10B),
-?OPENT(115,is_function2,['_','_','_'],?OTP_R10B_6),
-?OPENT(116,bs_start_match2,[j,'_','_','_','_'],?OTP_R11B,?OTP_22),
-?OPENT(117,bs_get_integer2,[j,'_','_','_','_','G','_'],?OTP_R11B,?OTP_22),
-?OPENT(118,bs_get_float2,[j,'_','_','_','_','G','_'],?OTP_R11B,?OTP_22),
-?OPENT(119,bs_get_binary2,[j,'_','_','_','_','G','_'],?OTP_R11B,?OTP_22),
-?OPENT(120,bs_skip_bits2,[j,'_','_','_','G'],?OTP_R11B,?OTP_22),
-?OPENT(121,bs_test_tail2,[j,'_','_'],?OTP_R11B,?OTP_22),
-?OPENT(122,bs_save2,['_','_'],?OTP_R11B,?OTP_22),
-?OPENT(123,bs_restore2,['_','_'],?OTP_R11B,?OTP_22),
-?OPENT(124,gc_bif1,[j,'U','F','_','_'],?OTP_R11B),
-?OPENT(125,gc_bif2,[j,'U','F','_','_','_'],?OTP_R11B),
-?OPENT(126,bs_final2,['_','_'],?OTP_R11B,?OTP_R12B),
-?OPENT(127,bs_bits_to_bytes2,['_','_'],?OTP_R11B,?OTP_R12B),
-?OPENT(128,put_literal,['_','_'],?OTP_R11B_4,?OTP_R12B),
-?OPENT(129,is_bitstr,['_','_'],?OTP_R11B_5),
-?OPENT(130,bs_context_to_binary,['_'],?OTP_R12B,?OTP_22),
-?OPENT(131,bs_test_unit,[j,'_','_'],?OTP_R12B),
-?OPENT(132,bs_match_string,['_','_','_','_'],?OTP_R12B),
-?OPENT(133,bs_init_writable,[],?OTP_R12B),
-?OPENT(134,bs_append,[j,'_','_','_','_','_','G','_'],?OTP_R12B),
-?OPENT(135,bs_private_append,[j,'_','_','_','G','_'],?OTP_R12B),
-?OPENT(136,trim,['U','U'],?OTP_R12B),
-?OPENT(137,bs_init_bits,[j,'_','_','_','G','_'],?OTP_R12B),
-?OPENT(138,bs_get_utf8,[j,'_','_','G','_'],?OTP_R12B_5),
-?OPENT(139,bs_skip_utf8,[j,'_','_','G'],?OTP_R12B_5),
-?OPENT(140,bs_get_utf16,[j,'_','_','G','_'],?OTP_R12B_5),
-?OPENT(141,bs_skip_utf16,[j,'_','_','G'],?OTP_R12B_5),
-?OPENT(142,bs_get_utf32,[j,'_','_','G','_'],?OTP_R12B_5),
-?OPENT(143,bs_skip_utf32,[j,'_','_','G'],?OTP_R12B_5),
-?OPENT(144,bs_utf8_size,[j,'_','_'],?OTP_R12B_5),
-?OPENT(145,bs_put_utf8,[j,'G','_'],?OTP_R12B_5),
-?OPENT(146,bs_utf16_size,[j,'_','_'],?OTP_R12B_5),
-?OPENT(147,bs_put_utf16,[j,'G','_'],?OTP_R12B_5),
-?OPENT(148,bs_put_utf32,[j,'G','_'],?OTP_R12B_5),
-?OPENT(149,on_load,[],?OTP_R13B_03),
-?OPENT(150,recv_mark,['_'],?OTP_R14A,?OTP_24),
-?OPENT(151,recv_set,['_'],?OTP_R14A,?OTP_24),
-?OPENT(152,gc_bif3,[j,'U','F','_','_','_','_'],?OTP_R14A),
-?OPENT(153,line,['L'],?OTP_R15A),
-?OPENT(154,put_map_assoc,[j,s,d,'U','R'],?OTP_R17),
-?OPENT(155,put_map_exact,[j,s,d,'U','R'],?OTP_R17),
-?OPENT(156,is_map,['_','_'],?OTP_R17),
-?OPENT(157,has_map_fields,[j,s,'R'],?OTP_R17),
-?OPENT(158,get_map_elements,[j,s,'R'],?OTP_R17),
-?OPENT(159,is_tagged_tuple,['_','_','_','_'],?OTP_20),
-?OPENT(160,build_stacktrace,[],?OTP_21),
-?OPENT(161,raw_raise,[],?OTP_21),
-?OPENT(162,get_hd,['_','_'],?OTP_21),
-?OPENT(163,get_tl,['_','_'],?OTP_21),
-?OPENT(164,put_tuple2,[d,'R'],?OTP_22),
-?OPENT(165,bs_get_tail,['_','_','_'],?OTP_22),
-?OPENT(166,bs_start_match3,[j,'_','_','_'],?OTP_22),
-?OPENT(167,bs_get_position,['_','_','_'],?OTP_22),
-?OPENT(168,bs_set_position,['_','_'],?OTP_22),
-?OPENT(169,swap,['_','_'],?OTP_23),
-?OPENT(170,bs_start_match4,['_','_','_','_'],?OTP_23),
-?OPENT(171,make_fun3,['_','_','_'],?OTP_24),
-?OPENT(172,init_yregs,['_'],?OTP_24),
-?OPENT(173,recv_marker_bind,['_','_'],?OTP_24),
-?OPENT(174,recv_marker_clear,['_'],?OTP_24),
-?OPENT(175,recv_marker_reserve,['_'],?OTP_24),
-?OPENT(176,recv_marker_use,['_'],?OTP_24),
-?OPENT(177,bs_create_bin,[j,'_','_','_','_','_'],?OTP_25),
-?OPENT(178,call_fun2,['_','A',s],?OTP_25),
-?OPENT(179,nif_start,[],?OTP_25),
-?OPENT(180,badrecord,['_'],?OTP_25)
+?OPENT(?LABEL,label,['U']),
+?OPENT(?FUNC_INFO,func_info,[a,a,'U']),
+?OPENT(?INT_CODE_END,int_code_end,[]),
+?OPENT(?CALL,call,['A',j]),
+?OPENT(?CALL_LAST,call_last,['A',j,'U']),
+?OPENT(?CALL_ONLY,call_only,['A',j]),
+?OPENT(?CALL_EXT,call_ext,['A','F']),
+?OPENT(?CALL_EXT_LAST,call_ext_last,['A','F','U']),
+?OPENT(?BIF0,bif0,['F',d]),
+?OPENT(?BIF1,bif1,[j,'F',s,d]),
+?OPENT(?BIF2,bif2,[j,'F',s,s,d]),
+?OPENT(?ALLOCATE,allocate,['U','U']),
+?OPENT(?ALLOCATE_HEAP,allocate_heap,['U',k,'U']),
+?OPENT(?ALLOCATE_ZERO,allocate_zero,['U','U'], ?DEFAULT_VSN, ?OTP_24),
+?OPENT(?ALLOCATE_HEAP_ZERO,allocate_heap_zero,['U','U','U'], ?DEFAULT_VSN, ?OTP_24),
+?OPENT(?TEST_HEAP,test_heap,[k,'U']),
+?OPENT(?INIT,init,[d], ?DEFAULT_VSN, ?OTP_24),
+?OPENT(?DEALLOCATE,deallocate,['U']),
+?OPENT(?RETURN,return,[]),
+?OPENT(?SEND,send,[]),
+?OPENT(?REMOVE_MESSAGE,remove_message,[]),
+?OPENT(?TIMEOUT,timeout,[]),
+?OPENT(?LOOP_REC,loop_rec,[j,d]),
+?OPENT(?LOOP_REC_END,loop_rec_end,[j]),
+?OPENT(?WAIT,wait,[j]),
+?OPENT(?WAIT_TIMEOUT,wait_timeout,[j,s]),
+?OPENT(?M_PLUS,m_plus,[j,s,s,d],?DEFAULT_VSN,?OTP_R13B_03),
+?OPENT(?M_MINUS,m_minus,[j,s,s,d],?DEFAULT_VSN,?OTP_R13B_03),
+?OPENT(?M_TIMES,m_times,[j,s,s,d],?DEFAULT_VSN,?OTP_R13B_03),
+?OPENT(?M_DIV,m_div,[j,s,s,d],?DEFAULT_VSN,?OTP_R13B_03),
+?OPENT(?INT_DIV,int_div,[j,s,s,d],?DEFAULT_VSN,?OTP_R13B_03),
+?OPENT(?INT_REM,int_rem,[j,s,s,d],?DEFAULT_VSN,?OTP_R13B_03),
+?OPENT(?INT_BAND,int_band,[j,s,s,d],?DEFAULT_VSN,?OTP_R13B_03),
+?OPENT(?INT_BOR,int_bor,[j,s,s,d],?DEFAULT_VSN,?OTP_R13B_03),
+?OPENT(?INT_BXOR,int_bxor,[j,s,s,d],?DEFAULT_VSN,?OTP_R13B_03),
+?OPENT(?INT_BSL,int_bsl,[j,s,s,d],?DEFAULT_VSN,?OTP_R13B_03),
+?OPENT(?INT_BSR,int_bsr,[j,s,s,d],?DEFAULT_VSN,?OTP_R13B_03),
+?OPENT(?INT_BNOT,int_bnot,[j,s,d],?DEFAULT_VSN,?OTP_R13B_03),
+?OPENT(?IS_LT,is_lt,[j,s,s]),
+?OPENT(?IS_GE,is_ge,[j,s,s]),
+?OPENT(?IS_EQ,is_eq,[j,s,s]),
+?OPENT(?IS_NE,is_ne,[j,s,s]),
+?OPENT(?IS_EQ_EXACT,is_eq_exact,[j,s,s]),
+?OPENT(?IS_NE_EXACT,is_ne_exact,[j,s,s]),
+?OPENT(?IS_INTEGER,is_integer,[j,s]),
+?OPENT(?IS_FLOAT,is_float,[j,s]),
+?OPENT(?IS_NUMBER,is_number,[j,s]),
+?OPENT(?IS_ATOM,is_atom,[j,s]),
+?OPENT(?IS_PID,is_pid,[j,s]),
+?OPENT(?IS_REFERENCE,is_reference,[j,s]),
+?OPENT(?IS_PORT,is_port,[j,s]),
+?OPENT(?IS_NIL,is_nil,[j,s]),
+?OPENT(?IS_BINARY,is_binary,[j,s]),
+?OPENT(?IS_CONSTANT,is_constant,[j,s], ?OTP_R4, ?OTP_R13B_03),
+?OPENT(?IS_LIST,is_list,[j,s]),
+?OPENT(?IS_NONEMPTY_LIST,is_nonempty_list,[j,s]),
+?OPENT(?IS_TUPLE,is_tuple,[j,s]),
+?OPENT(?TEST_ARITY,test_arity,[j,s,'A']),
+?OPENT(?SELECT_VAL,select_val,[s,j,'R']),
+?OPENT(?SELECT_TUPLE_ARITY,select_tuple_arity,[s,j,'R']),
+?OPENT(?JUMP,jump,[j]),
+?OPENT(?CATCH,'catch',[d,j]),
+?OPENT(?CATCH_END,catch_end,[d]),
+?OPENT(?MOVE,move,[s,d]),
+?OPENT(?GET_LIST,get_list,[s,d,d]),
+?OPENT(?GET_TUPLE_ELEMENT,get_tuple_element,[s,'U',d]),
+?OPENT(?SET_TUPLE_ELEMENT,set_tuple_element,[s,d,'U']),
+?OPENT(?PUT_STRING,put_string,['_','_','_'],?DEFAULT_VSN,?OTP_R13B_03),
+?OPENT(?PUT_LIST,put_list,[s,s,d]),
+?OPENT(?PUT_TUPLE,put_tuple,['U',d],?DEFAULT_VSN,?OTP_22),
+?OPENT(?PUT,put,[s],?DEFAULT_VSN,?OTP_22),
+?OPENT(?BADMATCH,badmatch,['_']),
+?OPENT(?IF_END,if_end,[]),
+?OPENT(?CASE_END,case_end,['_']),
+?OPENT(?CALL_FUN,call_fun,['U']),
+?OPENT(?MAKE_FUN,make_fun,['_','_','_'],?DEFAULT_VSN,?OTP_R13B_03),
+?OPENT(?IS_FUNCTION,is_function,['_','_']),
+?OPENT(?CALL_EXT_ONLY,call_ext_only,['A','F'],?OTP_R5, ?OTP_R13B_03),
+?OPENT(?BS_START_MATCH,bs_start_match,['_','_'],?OTP_R7, ?OTP_R13B_03),
+?OPENT(?BS_GET_INTEGER,bs_get_integer,['_','_'],?OTP_R7, ?OTP_R13B_03),
+?OPENT(?BS_GET_FLOAT,bs_get_float,['_','_'],?OTP_R7, ?OTP_R13B_03),
+?OPENT(?BS_GET_BINARY,bs_get_binary,['_','_'],?OTP_R7, ?OTP_R13B_03),
+?OPENT(?BS_SKIP_BITS,bs_skip_bits,['_','_'],?OTP_R7, ?OTP_R13B_03),
+?OPENT(?BS_TEST_TAIL,bs_test_tail,['_','_'],?OTP_R7, ?OTP_R13B_03),
+?OPENT(?BS_SAVE,bs_save,['_'],?OTP_R7, ?OTP_R13B_03),
+?OPENT(?BS_RESTORE,bs_restore,['_'],?OTP_R7, ?OTP_R13B_03),
+?OPENT(?BS_INIT,bs_init,['_','_'],?OTP_R7A, ?OTP_R13B_03),
+?OPENT(?BS_FINAL,bs_final,['_','_'],?OTP_R7A, ?OTP_R13B_03),
+?OPENT(?BS_PUT_INTEGER,bs_put_integer,[j,'_','_','G','_'],?OTP_R7A),
+?OPENT(?BS_PUT_BINARY,bs_put_binary,[j,'_','_','G','_'],?OTP_R7A),
+?OPENT(?BS_PUT_FLOAT,bs_put_float,[j,'_','_','G','_'],?OTP_R7A),
+?OPENT(?BS_PUT_STRING,bs_put_string,['U',st],?OTP_R7A),
+?OPENT(?BS_NEED_BUF,bs_need_buf,['_'],?OTP_R7B, ?OTP_R13B_03),
+?OPENT(?FCLEARERROR,fclearerror,[],?OTP_R8,?OTP_24),
+?OPENT(?FCHECKERROR,fcheckerror,['_'],?OTP_R8,?OTP_24),
+?OPENT(?FMOVE,fmove,[dlq,dl],?OTP_R8),
+?OPENT(?FCONV,fconv,['S',l],?OTP_R8),
+?OPENT(?FADD,fadd,[j,l,l,l],?OTP_R8),
+?OPENT(?FSUB,fsub,[j,l,l,l],?OTP_R8),
+?OPENT(?FMUL,fmul,[j,l,l,l],?OTP_R8),
+?OPENT(?FDIV,fdiv,[j,l,l,l],?OTP_R8),
+?OPENT(?FNEGATE,fnegate,[j,l,l],?OTP_R8),
+?OPENT(?MAKE_FUN2,make_fun2,['_'],?OTP_R8,?OTP_24),
+?OPENT(?TRY,'try',['S',j],?OTP_R10B),
+?OPENT(?TRY_END,try_end,['S'],?OTP_R10B),
+?OPENT(?TRY_CASE,try_case,['S'],?OTP_R10B),
+?OPENT(?TRY_CASE_END,try_case_end,[s],?OTP_R10B),
+?OPENT(?RAISE,raise,['S','S'],?OTP_R10B),
+?OPENT(?BS_INIT2,bs_init2,[j,s,'U','U','G',s],?OTP_R10B),
+?OPENT(?BS_BITS_TO_BYTES,bs_bits_to_bytes,['_','_','_'],?OTP_R10B, ?OTP_R13B_03),
+?OPENT(?BS_ADD,bs_add,['_','_','_','_','_'],?OTP_R10B),
+?OPENT(?APPLY,apply,['_'],?OTP_R10B),
+?OPENT(?APPLY_LAST,apply_last,['_','_'],?OTP_R10B),
+?OPENT(?IS_BOOLEAN,is_boolean,['_','_'],?OTP_R10B),
+?OPENT(?IS_FUNCTION2,is_function2,['_','_','_'],?OTP_R10B_6),
+?OPENT(?BS_START_MATCH2,bs_start_match2,[j,'_','_','_','_'],?OTP_R11B,?OTP_22),
+?OPENT(?BS_GET_INTEGER2,bs_get_integer2,[j,'_','_','_','_','G','_'],?OTP_R11B,?OTP_22),
+?OPENT(?BS_GET_FLOAT2,bs_get_float2,[j,'_','_','_','_','G','_'],?OTP_R11B,?OTP_22),
+?OPENT(?BS_GET_BINARY2,bs_get_binary2,[j,'_','_','_','_','G','_'],?OTP_R11B,?OTP_22),
+?OPENT(?BS_SKIP_BITS2,bs_skip_bits2,[j,'_','_','_','G'],?OTP_R11B,?OTP_22),
+?OPENT(?BS_TEST_TAIL2,bs_test_tail2,[j,'_','_'],?OTP_R11B,?OTP_22),
+?OPENT(?BS_SAVE2,bs_save2,['_','_'],?OTP_R11B,?OTP_22),
+?OPENT(?BS_RESTORE2,bs_restore2,['_','_'],?OTP_R11B,?OTP_22),
+?OPENT(?GC_BIF1,gc_bif1,[j,'U','F','_','_'],?OTP_R11B),
+?OPENT(?GC_BIF2,gc_bif2,[j,'U','F','_','_','_'],?OTP_R11B),
+?OPENT(?BS_FINAL2,bs_final2,['_','_'],?OTP_R11B,?OTP_R12B),
+?OPENT(?BS_BITS_TO_BYTES2,bs_bits_to_bytes2,['_','_'],?OTP_R11B,?OTP_R12B),
+?OPENT(?PUT_LITERAL,put_literal,['_','_'],?OTP_R11B_4,?OTP_R12B),
+?OPENT(?IS_BITSTR,is_bitstr,['_','_'],?OTP_R11B_5),
+?OPENT(?BS_CONTEXT_TO_BINARY,bs_context_to_binary,['_'],?OTP_R12B,?OTP_22),
+?OPENT(?BS_TEST_UNIT,bs_test_unit,[j,'_','_'],?OTP_R12B),
+?OPENT(?BS_MATCH_STRING,bs_match_string,[j,'_','U',stb],?OTP_R12B),
+?OPENT(?BS_INIT_WRITABLE,bs_init_writable,[],?OTP_R12B),
+?OPENT(?BS_APPEND,bs_append,[j,'_','_','_','_','_','G','_'],?OTP_R12B),
+?OPENT(?BS_PRIVATE_APPEND,bs_private_append,[j,'_','_','_','G','_'],?OTP_R12B),
+?OPENT(?TRIM,trim,['U','U'],?OTP_R12B),
+?OPENT(?BS_INIT_BITS,bs_init_bits,[j,'_','_','_','G','_'],?OTP_R12B),
+?OPENT(?BS_GET_UTF8,bs_get_utf8,[j,'_','_','G','_'],?OTP_R12B_5),
+?OPENT(?BS_SKIP_UTF8,bs_skip_utf8,[j,'_','_','G'],?OTP_R12B_5),
+?OPENT(?BS_GET_UTF16,bs_get_utf16,[j,'_','_','G','_'],?OTP_R12B_5),
+?OPENT(?BS_SKIP_UTF16,bs_skip_utf16,[j,'_','_','G'],?OTP_R12B_5),
+?OPENT(?BS_GET_UTF32,bs_get_utf32,[j,'_','_','G','_'],?OTP_R12B_5),
+?OPENT(?BS_SKIP_UTF32,bs_skip_utf32,[j,'_','_','G'],?OTP_R12B_5),
+?OPENT(?BS_UTF8_SIZE,bs_utf8_size,[j,'_','_'],?OTP_R12B_5),
+?OPENT(?BS_PUT_UTF8,bs_put_utf8,[j,'G','_'],?OTP_R12B_5),
+?OPENT(?BS_UTF16_SIZE,bs_utf16_size,[j,'_','_'],?OTP_R12B_5),
+?OPENT(?BS_PUT_UTF16,bs_put_utf16,[j,'G','_'],?OTP_R12B_5),
+?OPENT(?BS_PUT_UTF32,bs_put_utf32,[j,'G','_'],?OTP_R12B_5),
+?OPENT(?ON_LOAD,on_load,[],?OTP_R13B_03),
+?OPENT(?RECV_MARK,recv_mark,['_'],?OTP_R14A,?OTP_24),
+?OPENT(?RECV_SET,recv_set,['_'],?OTP_R14A,?OTP_24),
+?OPENT(?GC_BIF3,gc_bif3,[j,'U','F','_','_','_','_'],?OTP_R14A),
+?OPENT(?LLINE,line,['L'],?OTP_R15A),
+?OPENT(?PUT_MAP_ASSOC,put_map_assoc,[j,s,d,'U','R'],?OTP_R17),
+?OPENT(?PUT_MAP_EXACT,put_map_exact,[j,s,d,'U','R'],?OTP_R17),
+?OPENT(?IS_MAP,is_map,[j,s],?OTP_R17),
+?OPENT(?HAS_MAP_FIELDS,has_map_fields,[j,s,'R'],?OTP_R17),
+?OPENT(?GET_MAP_ELEMENTS,get_map_elements,[j,s,'R'],?OTP_R17),
+?OPENT(?IS_TAGGED_TUPLE,is_tagged_tuple,[j,s,'U',a],?OTP_20),
+?OPENT(?BUILD_STACKTRACE,build_stacktrace,[],?OTP_21),
+?OPENT(?RAW_RAISE,raw_raise,[],?OTP_21),
+?OPENT(?GET_HD,get_hd,[s,d],?OTP_21),
+?OPENT(?GET_TL,get_tl,[s,d],?OTP_21),
+?OPENT(?PUT_TUPLE2,put_tuple2,[d,'R'],?OTP_22),
+?OPENT(?BS_GET_TAIL,bs_get_tail,[s,d,'U'],?OTP_22),
+?OPENT(?BS_START_MATCH3,bs_start_match3,[j,'_','_','_'],?OTP_22),
+?OPENT(?BS_GET_POSITION,bs_get_position,['_','_','_'],?OTP_22),
+?OPENT(?BS_SET_POSITION,bs_set_position,['_','_'],?OTP_22),
+?OPENT(?SWAP,swap,['_','_'],?OTP_23),
+?OPENT(?BS_START_MATCH4,bs_start_match4,['_','_','_','_'],?OTP_23),
+?OPENT(?MAKE_FUN3,make_fun3,['_','_','_'],?OTP_24),
+?OPENT(?INIT_YREGS,init_yregs,['_'],?OTP_24),
+?OPENT(?RECV_MARKER_BIND,recv_marker_bind,['_','_'],?OTP_24),
+?OPENT(?RECV_MARKER_CLEAR,recv_marker_clear,['_'],?OTP_24),
+?OPENT(?RECV_MARKER_RESERVE,recv_marker_reserve,['_'],?OTP_24),
+?OPENT(?RECV_MARKER_USE,recv_marker_use,['_'],?OTP_24),
+?OPENT(?BS_CREATE_BIN,bs_create_bin,[j,'_','_','_','_','_'],?OTP_25),
+?OPENT(?CALL_FUN2,call_fun2,['_','A',s],?OTP_25),
+?OPENT(?NIF_START,nif_start,[],?OTP_25),
+?OPENT(?BADRECORD,badrecord,['_'],?OTP_25)
 }.
 
 is_bif(Name, Arity)  when is_atom(Name), is_integer(Arity), Arity >= 0 ->
