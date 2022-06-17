@@ -215,8 +215,8 @@
 
 %% debug/test
 -export([load_file/1, load_binary/1]).
--export([print_file/1,print_chunks/1]).
--export([test_file/1, test_chunks/1]).
+-export([print_file/1, print_binary/1, print_chunks/1]).
+-export([test_file/1, test_binary/1, test_chunks/1]).
 -export([obsolete/0, obsolete/1]).
 -export([encode/1]).
 -export([decode/1]).
@@ -328,24 +328,37 @@
 	dl     %% d|l
 	.
 
+-type bitflag() :: 
+	signed | unsigned |
+	big | little |
+	native | exact.
+
+-type alloc() ::
+	{word, unsigned()} |
+	{floats, unsigned()} |
+	{funs, unsigned()}.
+
 -type unsigned() :: non_neg_integer().
 -type jarg() :: {f,Lbl::unsigned()}.
 -type xarg() :: {x,Reg::0..1023}.
 -type yarg() :: {y,Reg::0..1023}.
 -type iarg() :: {i,integer()}.
--type uarg() :: {u,unsigned()}.
--type aarg() :: {atom,atom()}.
+-type uarg() :: {u,unsigned()}|unsigned().
+-type aarg() :: {atom,atom()}|atom().
 -type qarg() :: {literal, term()}.
 -type larg() :: {fr,Reg::0..1023}.
 -type narg() :: [].
 -type carg() :: iarg()|aarg()|narg()|qarg().
+-type karg() :: {alloc,[alloc()]}|uarg().
 -type reg() :: xarg()|yarg().
 -type src() :: reg()|carg().
 -type dst() :: reg().
 -type dl()  :: dst()|larg().
 -type dlq() :: dst()|larg()|qarg().
-%% -type mfa() :: {extfunc,Mod::atom(),Func::atom(),Arity::unsigned()}.
 -type mfa(A) :: {extfunc,Mod::atom(),Func::atom(),A}.
+-type linearg() :: [] | [{location,Filename::string(),Lineno::integer()}].
+-type listarg() :: {list,[src()]}.
+-type fieldflags() :: {field_flags,[bitflag()]}|[bitflag()].
 
 -define(JARG, {f,_}).
 	
@@ -387,10 +400,24 @@
 
 -define(DEFAULT_VSN, ?OTP_R4).
 
+%% @doc Specify a module local label.
+%%      Label gives this code address a name Lbl and marks the start of
+%%      a basic block.
+%%
+%%   <h4>opcode: 1</h4>
+%% @end
+%% @since OTP-R4
 
-label(L) when is_integer(L), L>= 0 ->
-    emit_instruction(label, [L]).
-    
+-spec label(Lbl::unsigned()) -> ok.
+label(Lbl) when is_integer(Lbl), Lbl >= 0 ->
+    emit_instruction(label, [Lbl]).
+
+%% @doc Define a function M:F/A.
+%%   <h4>opcode: 2</h4>
+%% @end
+%% @since OTP-R4
+-spec func_info(Mod::aarg(),Func::aarg(),Arity::uarg()) -> ok.
+
 func_info(Mod,Func,Arity) when is_atom(Mod), is_atom(Func), 
 			       is_integer(Arity), Arity >= 0 ->
     emit_instruction(func_info, [Mod, Func, Arity]);
@@ -398,266 +425,660 @@ func_info({atom,Mod},{atom,Func},Arity) when is_atom(Mod), is_atom(Func),
 					     is_integer(Arity), Arity >= 0 ->
     emit_instruction(func_info, [Mod, Func, Arity]).
 
+%% @doc Mark end of module.
+%%   <h4>opcode: 3</h4>
+%% @end
+%% @since OTP-R4
+-spec int_code_end() -> ok.
+
 int_code_end() ->
     emit_instruction(int_code_end).
 
-call(Arity, F) ->
-    emit_instruction(call, [Arity, F]).
+%% @doc Call the function at Label.
+%%      Save the next instruction as the return address in the CP register.
+%%   <h4>opcode: 4</h4>
+%% @end
+%% @since OTP-R4
+-spec call(Arity::uarg(), Label::jarg()) -> ok.
 
-call_last(Arity, F, Dealloc) ->
-    emit_instruction(call_last, [Arity,F,Dealloc]).
+call(Arity, Label) ->
+    emit_instruction(call, [Arity, Label]).
 
-call_only(Arity,F) ->
-    emit_instruction(call_only, [Arity, F]).
+%% @doc Deallocate and do a tail recursive call to the function at Label.
+%%      Do not update the CP register.
+%%      Before the call deallocate Deallocate words of stack.
+%%   <h4>opcode: 5</h4>
+%% @end
+%% @since OTP-R4
+-spec call_last(Arity::uarg(), Label::jarg(), Dealloc::uarg()) -> ok.
+call_last(Arity, Label, Dealloc) ->
+    emit_instruction(call_last, [Arity,Label,Dealloc]).
 
+%% @doc Do a tail recursive call to the function at Label.
+%%      Do not update the CP register.
+%%   <h4>opcode: 6</h4>
+%% @end
+%% @since OTP-R4
+call_only(Arity,Label) ->
+    emit_instruction(call_only, [Arity, Label]).
+
+%% @doc Call the function of arity Arity pointed to by Destination.
+%%      Save the next instruction as the return address in the CP register.
+%%   <h4>opcode: 7</h4>
+%% @end
+%% @since OTP-R4
 call_ext(Arity,Ext) ->
     emit_instruction(call_ext, [Arity, Ext]).
 
+%% @doc Deallocate and do a tail call to function of arity Arity
+%%      pointed to by Destination.
+%%      Do not update the CP register.
+%%      Deallocate Deallocate words from the stack before the call.
+%%   <h4>opcode: 8</h4>
+%% @end
+%% @since OTP-R4
 call_ext_last(Arity,Ext,Dealloc) ->
     emit_instruction(call_ext_last,[Arity,Ext,Dealloc]).
 
+%% @doc Call the bif Bif and store the result in Reg.
+%%   <h4>opcode: 9</h4>
+%% @end
 -spec bif0(Bif::atom()|mfa(0), Dst::dst()) ->
 	  ok.
-
 bif0(ExtFunc={extfunc,erlang,Bif,0}, Dst) when is_atom(Bif) ->
     emit_instruction(bif0,[ExtFunc,Dst]);
 bif0(Bif, Dst) when is_atom(Bif) ->
     emit_instruction(bif0,[{extfunc,erlang,Bif,0},Dst]).
 
--spec bif1(Fail::jarg(), Bif::atom()|mfa(1), Arg::src(), Dst::dst()) ->
+%% @doc Call the bif Bif with the argument Arg, and store the result in Reg.
+%%      On failure jump to Lbl.
+%%   <h4>opcode: 10</h4>
+%% @end
+%% @since OTP-R4
+-spec bif1(Lbl::jarg(), Bif::atom()|mfa(1), Arg::src(), Dst::dst()) ->
 	  ok.
+bif1(Lbl=?JARG,{extfunc,erlang,Bif,1}, Arg, Dst) when is_atom(Bif) ->
+    bif1_(Lbl, Bif, Arg, Dst);
+bif1(Lbl=?JARG, Bif, Arg, Dst) when is_atom(Bif) ->
+    bif1_(Lbl, Bif, Arg, Dst).
 
-bif1(Fail=?JARG,{extfunc,erlang,Bif,1}, Arg, Dst) when is_atom(Bif) ->
-    bif1_(Fail, Bif, Arg, Dst);
-bif1(Fail=?JARG, Bif, Arg, Dst) when is_atom(Bif) ->
-    bif1_(Fail, Bif, Arg, Dst).
-
-bif1_(Fail, Bif, Arg, Dst) ->
+bif1_(Lbl, Bif, Arg, Dst) ->
     case is_bif(Bif, 1) of
 	false -> error({Bif, not_a_bif});
 	true ->
 	    case is_gc_bif(Bif, 1) of
 		true ->
-		    gc_bif1(Fail,live(),Bif,Arg,Dst);
+		    gc_bif1(Lbl,live(),Bif,Arg,Dst);
 		false ->
-		    emit_instruction(bif1,[Fail,{extfunc,erlang,Bif,1},
+		    emit_instruction(bif1,[Lbl,{extfunc,erlang,Bif,1},
 					   Arg,Dst]) 
 	    end
     end.
 
--spec bif2(Fail::jarg(), Bif::atom()|mfa(2), Arg1::src(), Arg2::src(),
+%% @doc Call the bif Bif with the arguments Arg1 and Arg2,
+%%      and store the result in Reg.
+%%      On failure jump to Lbl.
+%%   <h4>opcode: 11</h4>
+%% @end
+%% @since OTP-R4
+-spec bif2(Lbl::jarg(), Bif::atom()|mfa(2), Arg1::src(), Arg2::src(),
 	   Dst::dst()) -> ok.
 
-bif2(Fail=?JARG,{extfunc,erlang,Bif,2},Arg1,Arg2,Dst) when is_atom(Bif) ->
-    bif2_(Fail,Bif,Arg1,Arg2,Dst);
-bif2(Fail=?JARG, Bif, Arg1, Arg2, Dst) when is_atom(Bif) ->
-    bif2_(Fail, Bif, Arg1, Arg2, Dst).
+bif2(Lbl=?JARG,{extfunc,erlang,Bif,2},Arg1,Arg2,Dst) when is_atom(Bif) ->
+    bif2_(Lbl,Bif,Arg1,Arg2,Dst);
+bif2(Lbl=?JARG, Bif, Arg1, Arg2, Dst) when is_atom(Bif) ->
+    bif2_(Lbl, Bif, Arg1, Arg2, Dst).
 
-bif2_(Fail, Bif, Arg1, Arg2, Dst) ->
+bif2_(Lbl, Bif, Arg1, Arg2, Dst) ->
     case is_bif(Bif, 2) of
 	false -> error({Bif, not_a_bif});
 	true ->
 	    case is_gc_bif(Bif, 2) of
 		true ->
-		    gc_bif2(Fail,live(),Bif,Arg1,Arg2,Dst);
+		    gc_bif2(Lbl,live(),Bif,Arg1,Arg2,Dst);
 		false ->
-		    emit_instruction(bif2,[Fail,{extfunc,erlang,Bif,2},
+		    emit_instruction(bif2,[Lbl,{extfunc,erlang,Bif,2},
 					   Arg1,Arg2,Dst]) 
 	    end
     end.
 
--spec bif3(Fail::jarg(), Bif::atom()|mfa(3),
+-spec bif3(Lbl::jarg(), Bif::atom()|mfa(3),
 	   Arg1::src(), Arg2::src(),Arg3::src(),
 	   Dst::dst()) -> ok.
 
-bif3(Fail=?JARG,{extfunc,erlang,Bif,3},Arg1,Arg2,Arg3,Dst)  when is_atom(Bif) ->
-    bif3_(Fail,Bif,Arg1,Arg2,Arg3,Dst);
-bif3(Fail=?JARG, Bif, Arg1, Arg2, Arg3, Dst) when is_atom(Bif) ->
-    bif3_(Fail, Bif, Arg1, Arg2, Arg3, Dst).
+bif3(Lbl=?JARG,{extfunc,erlang,Bif,3},Arg1,Arg2,Arg3,Dst)  when is_atom(Bif) ->
+    bif3_(Lbl,Bif,Arg1,Arg2,Arg3,Dst);
+bif3(Lbl=?JARG, Bif, Arg1, Arg2, Arg3, Dst) when is_atom(Bif) ->
+    bif3_(Lbl, Bif, Arg1, Arg2, Arg3, Dst).
 
-bif3_(Fail, Bif, Arg1, Arg2, Arg3, Dst) ->
+bif3_(Lbl, Bif, Arg1, Arg2, Arg3, Dst) ->
     case is_bif(Bif, 3) of
 	false -> error({Bif, not_a_bif});
 	true ->
 	    case is_gc_bif(Bif, 3) of
 		true ->
-		    gc_bif3(Fail,live(),Bif,Arg1,Arg2,Arg3,Dst)
+		    gc_bif3(Lbl,live(),Bif,Arg1,Arg2,Arg3,Dst)
 		%% there is no BIF3 yet..
 	    end
     end.
 
-allocate(StackNeed) ->
-    allocate(StackNeed, live()).
+%% @doc Allocate space for StackNeed words on the stack. If a GC is needed
+%%      during allocation there are Live number of live X registers.
+%%      Also save the continuation pointer (CP) on the stack.
+%%   <h4>opcode: 12</h4>
+%% @end
+%% @since OTP-R4
+-spec allocate(StackNeed::uarg(), Live::uarg()) -> ok.
 allocate(StackNeed,Live) ->
     emit_instruction(allocate,[StackNeed,Live]).
 
-allocate_heap(StackNeed,HeapNeed) ->
-    allocate_heap(StackNeed,HeapNeed,live()).
+%% @doc Like allocate but Live is taken from the last call to
+%%           live/1 library function.
+%%   <h4>opcode: 12</h4>
+%% @end
+%% @equiv allocate(StackNeed, live())
+%% @since OTP-R4
+-spec allocate(StackNeed::uarg()) -> ok.
+allocate(StackNeed) ->
+    allocate(StackNeed, live()).
+
+%% @doc Allocate space for StackNeed words on the stack and ensure
+%%      there is space for HeapNeed words on the heap. If a GC is needed
+%%      save Live number of X registers.
+%%      Also save the continuation pointer (CP) on the stack.
+%%   <h4>opcode: 13</h4>
+%% @end
+%% @since OTP-R4
+-spec allocate_heap(StackNeed::uarg(),HeapNeed::karg(),Live::uarg()) -> ok.
 allocate_heap(StackNeed,HeapNeed,Live) ->
     emit_instruction(allocate_heap,[StackNeed,HeapNeed,Live]).
-    
-allocate_zero(StackNeed) ->
-    allocate_zero(StackNeed,live()).
+
+%% @doc Allocate space for Stack and Heap.
+%%   <h4>opcode: 13</h4>
+%% @end
+%% @equiv allocate_heap(StackNeed,HeapNeed,live())
+%% @since OTP-R4
+
+-spec allocate_heap(StackNeed::uarg(),HeapNeed::karg()) -> ok.
+allocate_heap(StackNeed,HeapNeed) ->
+    allocate_heap(StackNeed,HeapNeed,live()).
+
+%% @doc Allocate space for StackNeed words on the stack. If a GC is needed
+%%      during allocation there are Live number of live X registers.
+%%      Clear the new stack words. (By writing NIL.)
+%%      Also save the continuation pointer (CP) on the stack.
+%%
+%%      OTP 24: This instruction has been superseded by @see allocate/2 followed
+%%      by @see init_yregs/1.
+%%   <h4>opcode: 14</h4>
+%% @end
+%% @since OTP-R4
+%% @deprecated OTP-24.
+
+
 allocate_zero(StackNeed,Live) ->
     emit_instruction(allocate_zero,[StackNeed,Live]).
 
+%% @doc Allocate space for StackNeed words on the stack.
+%%   <h4>opcode: 14</h4>
+%% @end
+%% @equiv allocate_zero(StackNeed,live())
+%% @since OTP-R4
+allocate_zero(StackNeed) ->
+    allocate_zero(StackNeed,live()).
+
+%% @doc Allocate space for StackNeed words on the stack and HeapNeed words
+%%      on the heap. If a GC is needed
+%%      during allocation there are Live number of live X registers.
+%%      Clear the new stack words. (By writing NIL.)
+%%      Also save the continuation pointer (CP) on the stack.
+%%
+%%      OTP 24: This instruction has been superseded by @see allocate_heap/2
+%%      followed by @see init_yregs/1.
+%%   <h4>opcode: 15</h4>
+%% @end
+%% @since OTP-R4
+%% @deprecated OTP-24.
+-spec allocate_heap_zero(StackNeed::unsigned(),HeapNeed::unsigned()) -> ok.
 allocate_heap_zero(StackNeed,HeapNeed) ->
     allocate_heap_zero(StackNeed,HeapNeed,live()).
 allocate_heap_zero(StackNeed,HeapNeed,Live) ->
     emit_instruction(allocate_heap_zero,[StackNeed,HeapNeed,Live]).
 
+%% @doc Ensure there is space for HeapNeed words on the heap. If a GC is needed
+%%      save Live number of X registers.
+%%   <h4>opcode: 16</h4>
+%% @end
+%% @since OTP-R4
+-spec test_heap(HeapNeed::unsigned()) -> ok.
 test_heap(HeapNeed) ->
     test_heap(HeapNeed,live()).
 test_heap(HeapNeed,Live) ->
     emit_instruction(test_heap,[HeapNeed,Live]).
-    
-init(Dst) ->
-    emit_instruction(init,[Dst]).
 
-deallocate(Deallocate) ->
-    emit_instruction(deallocate,[Deallocate]).
+%% @doc Clear the Nth stack word. (By writing NIL.)
+%%       OTP 24: This instruction has been superseded by init_yregs/1.    
+%%   <h4>opcode: 17</h4>
+%% @end
+%% @since OTP-R4
+-spec init(N::unsigned()) -> ok.
+init(N) ->
+    emit_instruction(init,[N]).
 
+%% @doc Restore the continuation pointer (CP) from the stack and deallocate
+%%       N+1 words from the stack (the + 1 is for the CP).
+%%   <h4>opcode: 18</h4>
+%% @end
+%% @since OTP-R4
+-spec deallocate(N::unsigned()) -> ok.
+deallocate(N) ->
+    emit_instruction(deallocate,[N]).
+
+%% @doc Return to the address in the continuation pointer (CP).
+%%   <h4>opcode: 19</h4>
+%% @end
 return() ->
     emit_instruction(return).
 
+%% @doc Send argument in x(1) as a message to the destination process in x(0).
+%%       The message in x(1) ends up as the result of the send in x(0).
+%%   <h4>opcode: 20</h4>
+%% @end
+%% @since OTP-R4
 send() ->
     emit_instruction(send).
 
+%% @doc Unlink the current message from the message queue. Remove any timeout.
+%%   <h4>opcode: 21</h4>
+%% @end
+%% @since OTP-R4
 remove_message() ->
     emit_instruction(remove_message).
 
+%% @doc Reset the save point of the mailbox and clear the timeout flag.
+%%   <h4>opcode: 22</h4>
+%% @end
+%% @since OTP-R4
 timeout() ->
     emit_instruction(timeout).
 
+%% @doc Loop over the message queue, if it is empty jump to Label.
+%%   <h4>opcode: 23</h4>
+%% @end
+%% @since OTP-R4
 loop_rec(F,Dst) ->
     emit_instruction(loop_rec,[F,Dst]).
-    
+
+%% @doc Advance the save pointer to the next message and jump back to Label.
+%%   <h4>opcode: 24</h4>
+%% @end
+%% @since OTP-R4
 loop_rec_end(F) ->
     emit_instruction(loop_rec_end,[F]).
 
+%% @doc  Suspend the processes and set the entry point to the beginning of the
+%%       receive loop at Label.
+%%   <h4>opcode: 24</h4>
+%% @end
+%% @since OTP-R4
 wait(F) ->
     emit_instruction(wait,[F]).
 
+%% @doc  Sets up a timeout of Time milliseconds and saves the address of the
+%%       following instruction as the entry point if the timeout triggers.
+%%   <h4>opcode: 26</h4>
+%% @end
+%% @since OTP-R4
 wait_timeout(F,Src) ->
     emit_instruction(wait_timeout,[F,Src]).
-    
-m_plus(Fail=?JARG,A1,A2,Reg) -> 
-    emit_instruction(m_plus,[Fail,A1,A2,Reg]).
-    
-m_minus(Fail=?JARG,A1,A2,Reg) ->
-    emit_instruction(m_minus,[Fail,A1,A2,Reg]).
 
-m_times(Fail=?JARG,A1,A2,Reg) ->
-    emit_instruction(m_times,[Fail,A1,A2,Reg]).
+%% @doc Mixed add. add number Arg1 to number Arg and store result in 
+%%      register Dst
+%%   <h4>opcode: 27</h4>
+%% @end
+%% @since OTP-R4
+%% @deprecated OTP-R13B-03
 
-m_div(Fail=?JARG,A1,A2,Reg) ->
-    emit_instruction(m_div,[Fail,A1,A2,Reg]).
+-spec m_plus(Lbl::jarg(),Arg1::src(),Arg2::src(),Dst::dst()) -> ok.
 
-int_div(Fail=?JARG,A1,A2,Reg) ->
-    emit_instruction(int_div,[Fail,A1,A2,Reg]).
+m_plus(Lbl=?JARG,Arg1,Arg2,Reg) -> 
+    emit_instruction(m_plus,[Lbl,Arg1,Arg2,Reg]).
 
-int_rem(Fail=?JARG,A1,A2,Reg) ->
-    emit_instruction(int_rem,[Fail,A1,A2,Reg]).
+%% @doc Mixed subtract. subtract number Arg1 from number Arg2 and store result 
+%%      in register Dst register.
+%%   <h4>opcode: 28</h4>
+%% @end
+%% @since OTP-R4
+%% @deprecated OTP-R13B-03
 
-int_band(Fail=?JARG,A1,A2,Reg) ->
-    emit_instruction(int_band,[Fail,A1,A2,Reg]).
+-spec m_minus(Lbl::jarg(),Arg1::src(),Arg2::src(),Dst::dst()) -> ok.
 
-int_bor(Fail=?JARG,A1,A2,Reg) ->
-    emit_instruction(int_bor,[Fail,A1,A2,Reg]).
-int_bxor(Fail=?JARG,A1,A2,Reg) ->
-    emit_instruction(int_bxor,[Fail,A1,A2,Reg]).
+m_minus(Lbl=?JARG,Arg1,Arg2,Dst) ->
+    emit_instruction(m_minus,[Lbl,Arg1,Arg2,Dst]).
 
-int_bsl(Fail=?JARG,A1,A2,Reg) ->
-    emit_instruction(int_bsl,[Fail,A1,A2,Reg]).
+%% @doc Mixed multiply. multiply number Arg1 to number Arg2 and store result in 
+%%      register Dst
+%%   <h4>opcode: 29</h4>
+%% @end
+%% @since OTP-R4
+%% @deprecated OTP-R13B-03
 
-int_bsr(Fail=?JARG,A1,A2,Reg) ->
-    emit_instruction(int_bsr,[Fail,A1,A2,Reg]).
-int_bnot(Fail=?JARG,A1,Reg) ->
-    emit_instruction(int_bnot,[Fail,A1,Reg]).
+-spec m_times(Lbl::jarg(),Arg1::src(),Arg2::src(),Dst::dst()) -> ok.
 
-is_lt(Fail=?JARG,A1,A2) -> 
-    emit_instruction(is_lt,[Fail,A1,A2]).
+m_times(Lbl=?JARG,Arg1,Arg2,Reg) ->
+    emit_instruction(m_times,[Lbl,Arg1,Arg2,Reg]).
 
-is_ge(Fail=?JARG,A1,A2) ->
-    emit_instruction(is_ge,[Fail,A1,A2]).
+%% @doc Mixed divide. Divide number Arg1 by number Arg2 and store result in 
+%%      register Dst
+%%   <h4>opcode: 30</h4>
+%% @end
+%% @since OTP-R4
+%% @deprecated OTP-R13B-03
 
-is_eq(Fail,A1,A2) ->
-    emit_instruction(is_eq, [Fail,A1,A2]).
+-spec m_div(Lbl::jarg(),Arg1::src(),Arg2::src(),Dst::dst()) -> ok.
 
-is_ne(Fail,A1,A2) ->
-    emit_instruction(is_ne,[Fail,A1,A2]).
+m_div(Lbl=?JARG,Arg1,Arg2,Reg) ->
+    emit_instruction(m_div,[Lbl,Arg1,Arg2,Reg]).
 
-is_eq_exact(Fail,A1,A2) ->
-    emit_instruction(is_eq_exact,[Fail,A1,A2]).
+%% @doc Integer divide. Divide integer Arg1 by integer Arg2 and store quotient
+%%      in register Dst
+%%   <h4>opcode: 31</h4>
+%% @end
+%% @since OTP-R4
+%% @deprecated OTP-R13B-03
 
-is_ne_exact(Fail,A1,A2) ->
-    emit_instruction(is_ne_exact,[Fail,A1,A2]).
+-spec int_div(Lbl::jarg(),Arg1::src(),Arg2::src(),Dst::dst()) -> ok.
 
-is_integer(Fail,A1) ->
-    emit_instruction(is_integer,[Fail,A1]).
+int_div(Lbl=?JARG,Arg1,Arg2,Dst) ->
+    emit_instruction(int_div,[Lbl,Arg1,Arg2,Dst]).
 
-is_float(Fail,A1) ->
-    emit_instruction(is_float,[Fail,A1]).
+%% @doc Integer reminder. Get the integer reminder after integer divition 
+%%      with integer Arg1 by integer Arg2 and store result in register Dst
+%%   <h4>opcode: 32</h4>
+%% @end
+%% @since OTP-R4
+%% @deprecated OTP-R13B-03
 
-is_number(Fail,A1) ->
-    emit_instruction(is_number,[Fail,A1]).
+-spec int_rem(Lbl::jarg(),Arg1::src(),Arg2::src(),Dst::dst()) -> ok.
 
-is_atom(Fail,A1) ->
-    emit_instruction(is_atom,[Fail,A1]).    
+int_rem(Lbl=?JARG,Arg1,Arg2,Dst) ->
+    emit_instruction(int_rem,[Lbl,Arg1,Arg2,Dst]).
 
-is_pid(Fail,A1) ->
-    emit_instruction(is_pid,[Fail,A1]).
+%% @doc Bitwise and. Compute bitwise and of Integer Arg1 and integer Arg2
+%%      and store result in register Dst
+%%   <h4>opcode: 33</h4>
+%% @end
+%% @since OTP-R4
+%% @deprecated OTP-R13B-03
 
-is_reference(Fail,A1) ->
-    emit_instruction(is_reference,[Fail,A1]).
+-spec int_band(Lbl::jarg(),Arg1::src(),Arg2::src(),Dst::dst()) -> ok.
 
-is_port(Fail,A1) ->
-    emit_instruction(is_port,[Fail,A1]).
+int_band(Lbl=?JARG,Arg1,Arg2,Dst) ->
+    emit_instruction(int_band,[Lbl,Arg1,Arg2,Dst]).
 
-is_nil(Fail,A1) ->
-    emit_instruction(is_nil,[Fail,A1]).
+%% @doc Bitwise or. Compute bitwise or of Integer Arg1 and integer Arg2
+%%      and store result in register Dst
+%%   <h4>opcode: 34</h4>
+%% @end
+%% @since OTP-R4
+%% @deprecated OTP-R13B-03
 
-is_binary(Fail,A1) ->
-    emit_instruction(is_binary,[Fail,A1]).
+-spec int_bor(Lbl::jarg(),Arg1::src(),Arg2::src(),Dst::dst()) -> ok.
 
-is_constant(Fail,A1) ->
-    emit_instruction(is_constant,[Fail,A1]).
+int_bor(Lbl=?JARG,Arg1,Arg2,Dst) ->
+    emit_instruction(int_bor,[Lbl,Arg1,Arg2,Dst]).
 
-is_list(Fail,A1) ->
-    emit_instruction(is_list,[Fail,A1]).
+%% @doc Bitwise eclusive or. Compute xor of Integer Arg1 and integer Arg2
+%%      and store result in register Dst
+%%   <h4>opcode: 35</h4>
+%% @end
+%% @since OTP-R4
+%% @deprecated OTP-R13B-03
 
-is_nonempty_list(Fail,A1) ->
-    emit_instruction(is_nonempty_list,[Fail,A1]).
+-spec int_bxor(Lbl::jarg(),Arg1::src(),Arg2::src(),Dst::dst()) -> ok.
 
-is_tuple(Fail,A1) ->
-    emit_instruction(is_tuple,[Fail,A1]).
+int_bxor(Lbl=?JARG,Arg1,Arg2,Dst) ->
+    emit_instruction(int_bxor,[Lbl,Arg1,Arg2,Dst]).
 
-test_arity(Fail,Src,Size) ->
-    emit_instruction(test_arity,[Fail,Src,Size]).
+%% @doc Shift left. Compute integer shift left of integer Arg1 
+%%      of integer Arg2 number of bits
+%%      and store result in register Dst
+%%   <h4>opcode: 36</h4>
+%% @end
+%% @since OTP-R4
+%% @deprecated OTP-R13B-03
+-spec int_bsl(Lbl::jarg(),Arg1::src(),Arg2::src(),Dst::dst()) -> ok.
 
-select_val(Val,Fail,Pairs) ->
-    emit_instruction(select_val, [Val,Fail,Pairs]).
+int_bsl(Lbl=?JARG,Arg1,Arg2,Dst) ->
+    emit_instruction(int_bsl,[Lbl,Arg1,Arg2,Dst]).
 
-select_tuple_arity(Val,Fail,Pairs) ->
-    emit_instruction(select_tuple_arity,[Val,Fail,Pairs]).
+%% @doc Shift right. Compute integer shift right of integer Arg1 
+%%      of integer Arg2 number of bits
+%%      and store result in register Dst
+%%   <h4>opcode: 37</h4>
+%% @end
+%% @since OTP-R4
+%% @deprecated OTP-R13B-03
+-spec int_bsr(Lbl::jarg(),Arg1::src(),Arg2::src(),Dst::dst()) -> ok.
 
+int_bsr(Lbl=?JARG,Arg1,Arg2,Dst) ->
+    emit_instruction(int_bsr,[Lbl,Arg1,Arg2,Dst]).
+
+
+%% @doc Bitwise negate. Compute bit invert of integer Arg1 
+%%      and store result in register Dst
+%%   <h4>opcode: 38</h4>
+%% @end
+%% @since OTP-R4
+%% @deprecated OTP-R13B-03
+-spec int_bnot(Lbl::jarg(),Arg1::src(),Dst::dst()) -> ok.
+
+int_bnot(Lbl=?JARG,Arg1,Dst) ->
+    emit_instruction(int_bnot,[Lbl,Arg1,Dst]).
+
+%% @doc Compare two terms and jump to Lbl if Arg1 is not less than Arg2.
+%%   <h4>opcode: 39</h4>
+%% @end
+is_lt(Lbl=?JARG,Arg1,Arg2) -> 
+    emit_instruction(is_lt,[Lbl,Arg1,Arg2]).
+
+%% @doc Compare two terms and jump to Lbl if Arg1 is less than Arg2.
+%%   <h4>opcode: 40</h4>
+%% @end
+is_ge(Lbl=?JARG,Arg1,Arg2) ->
+    emit_instruction(is_ge,[Lbl,Arg1,Arg2]).
+
+%% @doc ompare two terms and jump to Lbl if Arg1 is not (numerically) equal to Arg2.
+%%   <h4>opcode: 41</h4>
+%% @end
+is_eq(Lbl,Arg1,Arg2) ->
+    emit_instruction(is_eq, [Lbl,Arg1,Arg2]).
+
+%% @doc Compare two terms and jump to Lbl if Arg1 is (numerically) equal to Arg2.
+%%   <h4>opcode: 42</h4>
+%% @end
+is_ne(Lbl,Arg1,Arg2) ->
+    emit_instruction(is_ne,[Lbl,Arg1,Arg2]).
+
+%% @doc Compare two terms and jump to Lbl if Arg1 is not exactly equal to Arg2.
+%%   <h4>opcode: 43</h4>
+%% @end
+is_eq_exact(Lbl,Arg1,Arg2) ->
+    emit_instruction(is_eq_exact,[Lbl,Arg1,Arg2]).
+
+%% @doc Compare two terms and jump to Lbl if Arg1 is exactly equal to Arg2.
+%%   <h4>opcode: 44</h4>
+%% @end
+is_ne_exact(Lbl,Arg1,Arg2) ->
+    emit_instruction(is_ne_exact,[Lbl,Arg1,Arg2]).
+
+%% @doc Test the type of Arg1 and jump to Lbl if it is not an integer.
+%%   <h4>opcode: 45</h4>
+%% @end
+is_integer(Lbl,Arg1) ->
+    emit_instruction(is_integer,[Lbl,Arg1]).
+
+%% @doc Test the type of Arg1 and jump to Lbl if it is not a float.
+%%   <h4>opcode: 46</h4>
+%% @end
+is_float(Lbl,Arg1) ->
+    emit_instruction(is_float,[Lbl,Arg1]).
+
+%% @doc Test the type of Arg1 and jump to Lbl if it is not a number.
+%%   <h4>opcode: 47</h4>
+%% @end
+is_number(Lbl,Arg1) ->
+    emit_instruction(is_number,[Lbl,Arg1]).
+
+%% @doc Test the type of Arg1 and jump to Lbl if it is not an atom.
+%%   <h4>opcode: 48</h4>
+%% @end
+is_atom(Lbl,Arg1) ->
+    emit_instruction(is_atom,[Lbl,Arg1]).    
+
+%% @doc Test the type of Arg1 and jump to Lbl if it is not a pid.
+%%   <h4>opcode: 49</h4>
+%% @end
+is_pid(Lbl,Arg1) ->
+    emit_instruction(is_pid,[Lbl,Arg1]).
+
+%% @doc Test the type of Arg1 and jump to Lbl if it is not a reference.
+%%   <h4>opcode: 50</h4>
+%% @end
+is_reference(Lbl,Arg1) ->
+    emit_instruction(is_reference,[Lbl,Arg1]).
+
+%% @doc Test the type of Arg1 and jump to Lbl if it is not a port.
+%%   <h4>opcode: 51</h4>
+%% @end
+is_port(Lbl,Arg1) ->
+    emit_instruction(is_port,[Lbl,Arg1]).
+
+%% @doc Test the type of Arg1 and jump to Lbl if it is not nil.
+%%   <h4>opcode: 52</h4>
+%% @end
+is_nil(Lbl,Arg1) ->
+    emit_instruction(is_nil,[Lbl,Arg1]).
+
+%% @doc Test the type of Arg1 and jump to Lbl if it is not a binary.
+%%   <h4>opcode: 53</h4>
+%% @end
+is_binary(Lbl,Arg1) ->
+    emit_instruction(is_binary,[Lbl,Arg1]).
+
+%% @doc Test the type of Arg1 and jump to Lbl if it is constant.
+%%   <h4>opcode: 54</h4>
+%% @end
+%% @since OTP-R4
+%% @deprecated OTP-13B-3
+
+is_constant(Lbl,Arg1) ->
+    emit_instruction(is_constant,[Lbl,Arg1]).
+
+%% @doc Test the type of Arg1 and jump to Lbl if it is not a cons or nil.
+%%   <h4>opcode: 55</h4>
+%% @end
+%% @since OTP-R4
+is_list(Lbl,Arg1) ->
+    emit_instruction(is_list,[Lbl,Arg1]).
+
+%% @doc Test the type of Arg1 and jump to Lbl if it is not a cons.
+%%   <h4>opcode: 56</h4>
+%% @end
+%% @since OTP-R4
+is_nonempty_list(Lbl,Arg1) ->
+    emit_instruction(is_nonempty_list,[Lbl,Arg1]).
+
+%% @doc Test the type of Arg1 and jump to Lbl if it is not a tuple.
+%%   <h4>opcode: 57</h4>
+%% @end
+%% @since OTP-R4
+is_tuple(Lbl,Arg1) ->
+    emit_instruction(is_tuple,[Lbl,Arg1]).
+
+%% @doc Test the arity of (the tuple in) Arg1 and jump
+%% to Lbl if it is not equal to Arity.
+%%   <h4>opcode: 58</h4>
+%% @end
+%% @since OTP-R4
+test_arity(Lbl,Src,Size) ->
+    emit_instruction(test_arity,[Lbl,Src,Size]).
+
+%% @doc Jump to the destination label corresponding to Arg
+%%      in the Destinations list, if no arity matches, jump to Lbl.
+%%   <h4>opcode: 59</h4>
+%% @end
+%% @since OTP-R4
+select_val(Val,Lbl,Pairs) ->
+    emit_instruction(select_val, [Val,Lbl,Pairs]).
+
+%% @doc Check the arity of the tuple Tuple and jump to the corresponding
+%%      destination label, if no arity matches, jump to Lbl.
+%%   <h4>opcode: 60</h4>
+%% @end
+%% @since OTP-R4
+select_tuple_arity(Val,Lbl,Pairs) ->
+    emit_instruction(select_tuple_arity,[Val,Lbl,Pairs]).
+
+%% @doc Jump to Label.
+%%   <h4>opcode: 61</h4>
+%% @end
+%% @since OTP-R4
 jump(F=?JARG) ->
     emit_instruction(jump, [F]).
 
-'catch'(Dst,Fail) ->
-    emit_instruction('catch',[Dst,Fail]).
+%% @doc Catch. Setup a catch environment in stack position Dst and 
+%%  jump to Lbl in case of failure.
+%%   <h4>opcode: 62</h4>
+%% @end
+%% @since OTP-R4
+-spec 'catch'(Dst::yarg(), Lbl::jarg()) -> ok.
+'catch'(Dst,Lbl) ->
+    emit_instruction('catch',[Dst,Lbl]).
 
+%% @doc Catch end. Unwind (current) catch environment in Dst
+%%   <h4>opcode: 63</h4>
+%% @end
+%% @since OTP-R4
+-spec catch_end(Dst::yarg()) -> ok.
 catch_end(Dst) ->
     emit_instruction(catch_end,[Dst]).
+
+%% @doc Move the source Src (a literal or a register) to
+%%      the destination register Dst.
+%%   <h4>opcode: 64</h4>
+%% @end
+%% @since OTP-R4
+-spec move(Src::src(), Dst::dst()) -> ok.
 
 move(Src,Dst) ->
     emit_instruction(move,[Src,Dst]).
 
+%% @doc Get the head and tail (or car and cdr) parts of a list
+%%       (a cons cell) from Src and put them into the registers
+%%       Head and Tail.
+%%   <h4>opcode: 65</h4>
+%% @end
+%% @since OTP-R4
+
+-spec get_list(Src::src(), Head::dst(), Tail::dst()) -> ok.
 get_list(Src,Head,Tail) ->
     emit_instruction(get_list,[Src,Head,Tail]).
-     
+
+%% @doc  Get element number Element from the tuple in Source and put
+%%       it in the destination register Destination.     
+%%   <h4>opcode: 66</h4>
+%% @end
+%% @since OTP-R4
+
 get_tuple_element(Src,Ix,Dst) ->
     emit_instruction(get_tuple_element,[Src,Ix,Dst]).
+
+%% @doc  Update the element at position Position of the tuple Tuple
+%%       with the new element NewElement.
+%%   <h4>opcode: 67</h4>
+%% @end
+%% @since OTP-R4
 
 set_tuple_element(Val,Dst,Ix) ->
     emit_instruction(set_tuple_element,[Val,Dst,Ix]).
@@ -674,8 +1095,8 @@ put_tuple(Arity,Dst) ->
 put(Src) ->
     emit_instruction(put,[Src]).
 
-badmatch(Fail) ->
-    emit_instruction(badmatch,[Fail]).
+badmatch(Lbl) ->
+    emit_instruction(badmatch,[Lbl]).
 
 if_end() ->
     emit_instruction(if_end).
@@ -683,35 +1104,56 @@ if_end() ->
 case_end(CaseVal) ->
     emit_instruction(case_end,[CaseVal]).
 
+%% @doc Call a fun of arity Arity. Assume arguments in
+%%      registers x(0) to x(Arity-1) and that the fun is in x(Arity).
+%%      Save the next instruction as the return address in the CP register.
+%%   <h4>opcode: 75</h4>
+%% @end
+%% @since OTP-R4
 call_fun(Arity) ->
     emit_instruction(call_fun,[Arity]).
 
+%% @doc Create a fun.
+%%   <h4>opcode: 76</h4>
+%% @end
+%% @since OTP-R4
+%% @deprecated OTP-R13B-03
 make_fun(Arg1, Arg2, Arg3) ->
     emit_instruction(make_fun,[Arg1, Arg2, Arg3]).
 
-is_function(Fail,A1) ->
-    emit_instruction(is_function,[Fail,A1]).
+%% @doc Test the type of Arg1 and jump to Lbl if it is not a
+%%      function (i.e. fun or closure).
+%%   <h4>opcode: 77</h4>
+%% @end
+is_function(Lbl,Arg1) ->
+    emit_instruction(is_function,[Lbl,Arg1]).
+
+%% @doc Do a tail recursive call to the function at Label.
+%%      Do not update the CP register.
+%%   <h4>opcode: 78</h4>
+%% @end
+%% @since OTP-R5
 
 call_ext_only(Arity,Fun) ->
     emit_instruction(call_ext_only,[Arity,Fun]).
 
-bs_start_match(Fail,Reg) ->
-    emit_instruction(bs_start_match,[Fail,Reg]).
+bs_start_match(Lbl,Reg) ->
+    emit_instruction(bs_start_match,[Lbl,Reg]).
     
-bs_get_integer(Fail,List) ->
-    emit_instruction(bs_get_integer,[Fail,List]).
+bs_get_integer(Lbl,List) ->
+    emit_instruction(bs_get_integer,[Lbl,List]).
     
-bs_get_float(Fail,List) ->
-    emit_instruction(bs_get_float,[Fail,List]).
+bs_get_float(Lbl,List) ->
+    emit_instruction(bs_get_float,[Lbl,List]).
     
-bs_get_binary(Fail,List) ->
-    emit_instruction(bs_get_binary,[Fail,List]).
+bs_get_binary(Lbl,List) ->
+    emit_instruction(bs_get_binary,[Lbl,List]).
 
-bs_skip_bits(Fail,List) ->
-    emit_instruction(bs_skip_bits,[Fail,List]).
+bs_skip_bits(Lbl,List) ->
+    emit_instruction(bs_skip_bits,[Lbl,List]).
 
-bs_test_tail(Fail,List) ->
-    emit_instruction(bs_test_tail,[Fail,List]).
+bs_test_tail(Lbl,List) ->
+    emit_instruction(bs_test_tail,[Lbl,List]).
 
 bs_save(N) ->
     emit_instruction(bs_save,[N]).
@@ -722,17 +1164,23 @@ bs_restore(N) ->
 bs_init(N,Flags) ->
     emit_instruction(bs_init,[N,Flags]).
 
-bs_final(Fail,X) ->
-    emit_instruction(bs_final,[Fail,X]).
+bs_final(Lbl,X) ->
+    emit_instruction(bs_final,[Lbl,X]).
 
-bs_put_integer(Fail=?JARG,ArgSz,N,Flags,ArgInt) ->
-    emit_instruction(bs_put_integer,[Fail,ArgSz,N,Flags,ArgInt]).
-    
-bs_put_binary(Fail=?JARG,ArgSz,N,Flags,ArgBin) ->
-    emit_instruction(bs_put_binary,[Fail,ArgSz,N,Flags,ArgBin]).
+-spec bs_put_integer(Fail::jarg(),Size::src(),Unit::uarg(),
+		     Flags::fieldflags(),ArgInt::src()) -> ok.
+bs_put_integer(Fail=?JARG,Size,Unit,Flags,Arg) ->
+    emit_instruction(bs_put_integer,[Fail,Size,Unit,Flags,Arg]).
 
-bs_put_float(Fail=?JARG,ArgSz,N,Flags,ArgFloat) ->
-    emit_instruction(bs_put_float,[Fail,ArgSz,N,Flags,ArgFloat]).
+-spec bs_put_binary(Fail::jarg(),Size::src()|{atom,all},
+		    Unit::uarg(),Flags::fieldflags(),Arg::src()) -> ok.    
+bs_put_binary(Fail=?JARG,Size,Unit,Flags,Arg) ->
+    emit_instruction(bs_put_binary,[Fail,Size,Unit,Flags,Arg]).
+
+-spec bs_put_float(Fail::jarg(),Size::src(),
+		   Unit::uarg(),Flags::fieldflags(),Arg::src()) -> ok.    
+bs_put_float(Fail=?JARG,Size,Unit,Flags,Arg) ->
+    emit_instruction(bs_put_float,[Fail,Size,Unit,Flags,Arg]).
 
 bs_put_string(Len,StrArg) ->
     emit_instruction(bs_put_string,[Len,StrArg]).
@@ -808,9 +1256,12 @@ is_boolean(Fail,A1) ->
 is_function2(Fail,A1,A2) ->
     emit_instruction(is_function2,[Fail,A1,A2]).
 
-bs_start_match2(Fail,Ctx,Live,Save,Dst) ->
-    emit_instruction(bs_start_match2,[Fail,Ctx,Live,Save,Dst]).
+-spec bs_start_match2(Fail::jarg(),Ctx::src(),Live::uarg(),Max::uarg(),Dst::dst()) -> ok.
+bs_start_match2(Fail=?JARG,Ctx,Live,Max,Dst) ->
+    emit_instruction(bs_start_match2,[Fail,Ctx,Live,Max,Dst]).
 
+-spec bs_get_integer2(Fail::jarg(),Ctx::src(),Live::uarg(),Size::src(),
+		      Unit::uarg(),Flags::fieldflags(),Dst::dst()) -> ok.
 bs_get_integer2(Fail,Ctx,Live,Size,N,Flags,Dst) ->
     emit_instruction(bs_get_integer2,[Fail,Ctx,Live,Size,N,Flags,Dst]).
 
@@ -820,7 +1271,9 @@ bs_get_float2(Fail,Ctx,Live,Size,N,Flags,Dst) ->
 bs_get_binary2(Fail,Ctx,Live,Size,N,Flags,Dst) ->
     emit_instruction(bs_get_binary2,[Fail,Ctx,Live,Size,N,Flags,Dst]).
 
-bs_skip_bits2(Fail,Ctx,Size,Unit,Flags) ->
+-spec bs_skip_bits2(Fail::jarg(),Ctx::src(),Size::src(),Unit::uarg(),
+		    Flags::fieldflags()) -> ok.
+bs_skip_bits2(Fail=?JARG,Ctx,Size,Unit,Flags) ->
     emit_instruction(bs_skip_bits2,[Fail,Ctx,Size,Unit,Flags]).
 
 bs_test_tail2(Fail,Ctx,N) ->
@@ -832,16 +1285,19 @@ bs_save2(Ctx, N) ->
 bs_restore2(Ctx, N) ->
     emit_instruction(bs_restore2,[Ctx, N]).
 
+-spec gc_bif1(Fail::jarg(),Live::uarg(),Bif::mfa(1)|atom(),
+	      Arg::src(),Dst::dst()) -> ok.
+gc_bif1(Fail,Live,ExtFunc={extfunc,erlang,_Bif,1},Arg,Dst) ->
+    emit_instruction(gc_bif1,[Fail,Live,ExtFunc,Arg,Dst]);
+gc_bif1(Fail,Live,Bif,Arg,Dst) when is_atom(Bif) ->
+    emit_instruction(gc_bif1,[Fail,Live,{extfunc,erlang,Bif,1},Arg,Dst]).
 
-gc_bif1(Fail,Live,ExtFunc={extfunc,erlang,_Bif,1},A1,Dst) ->
-    emit_instruction(gc_bif1,[Fail,Live,ExtFunc,A1,Dst]);
-gc_bif1(Fail,Live,Bif,A1,Dst) when is_atom(Bif) ->
-    emit_instruction(gc_bif1,[Fail,Live,{extfunc,erlang,Bif,1},A1,Dst]).
-
-gc_bif2(Fail,Live,ExtFunc={extfunc,erlang,_Bif,2},A1,A2,Dst) ->
-    emit_instruction(gc_bif2,[Fail,Live,ExtFunc,A1,A2,Dst]);
-gc_bif2(Fail,Live,Bif,A1,A2,Dst) when is_atom(Bif) ->
-    emit_instruction(gc_bif2,[Fail,Live,{extfunc,erlang,Bif,2},A1,A2,Dst]).
+-spec gc_bif2(Fail::jarg(),Live::uarg(),Bif::mfa(2)|atom(),
+	      Arg1::src(),Arg2::src(),Dst::dst()) -> ok.
+gc_bif2(Fail,Live,ExtFunc={extfunc,erlang,_Bif,2},Arg1,Arg2,Dst) ->
+    emit_instruction(gc_bif2,[Fail,Live,ExtFunc,Arg1,Arg2,Dst]);
+gc_bif2(Fail,Live,Bif,Arg1,Arg2,Dst) when is_atom(Bif) ->
+    emit_instruction(gc_bif2,[Fail,Live,{extfunc,erlang,Bif,2},Arg1,Arg2,Dst]).
 
 bs_final2(X,Y) ->
     emit_instruction(bs_final,[X,Y]).
@@ -900,41 +1356,55 @@ bs_skip_utf32(Fail,Arg2,Arg3,Flags) ->
 bs_utf8_size(Fail,Arg2,Arg3) ->
     emit_instruction(bs_utf8_size,[Fail,Arg2,Arg3]).
 
-bs_put_utf8(Fail,Flags,Arg3) ->
-    emit_instruction(bs_put_utf8,[Fail,Flags,Arg3]).
+-spec bs_put_utf8(Fail::jarg(),Flags::fieldflags(),Src::src()) -> ok.
+bs_put_utf8(Fail,Flags,Src) ->
+    emit_instruction(bs_put_utf8,[Fail,Flags,Src]).
 
 bs_utf16_size(Fail,Arg2,Arg3) ->
     emit_instruction(bs_utf16_size,[Fail,Arg2,Arg3]).
 
-bs_put_utf16(Fail,Flags,Arg3) ->
-    emit_instruction(bs_put_utf16,[Fail,Flags,Arg3]).
+-spec bs_put_utf16(Fail::jarg(),Flags::fieldflags(),Src::src()) -> ok.
+bs_put_utf16(Fail,Flags,Src) ->
+    emit_instruction(bs_put_utf16,[Fail,Flags,Src]).
 
-bs_put_utf32(Fail,Flags,Arg3) ->
-    emit_instruction(bs_put_utf32,[Fail,Flags,Arg3]).
+-spec bs_put_utf32(Fail::jarg(),Flags::fieldflags(),Src::src()) -> ok.
+bs_put_utf32(Fail,Flags,Src) ->
+    emit_instruction(bs_put_utf32,[Fail,Flags,Src]).
 
+-spec on_load() -> ok.
 on_load() ->
     emit_instruction(on_load).
 
-recv_mark(F) ->
-    emit_instruction(recv_mark,[F]).
+-spec recv_mark(Lbl::jarg()) -> ok.
+recv_mark(Lbl) ->
+    emit_instruction(recv_mark,[Lbl]).
 
-recv_set(F) ->
-    emit_instruction(recv_set,[F]).
+-spec recv_set(Lbl::jarg()) -> ok.
+recv_set(Lbl) ->
+    emit_instruction(recv_set,[Lbl]).
 
-gc_bif3(Fail,Live,ExtFunc={extfunc,erlang,_Bif,3},A1,A2,A3,Dst) ->
-    emit_instruction(gc_bif3,[Fail,Live,ExtFunc,A1,A2,A3,Dst]);
-gc_bif3(Fail,Live,Bif,A1,A2,A3,Dst) when is_atom(Bif) ->
-    emit_instruction(gc_bif3,[Fail,Live,{extfunc,erlang,Bif,3},A1,A2,A3,Dst]).
+-spec gc_bif3(Fail::jarg(),Live::uarg(),Bif::mfa(3)|atom(),
+	      Arg1::src(),Arg2::src(),Arg3::src(),Dst::dst()) -> ok.
+gc_bif3(Fail,Live,ExtFunc={extfunc,erlang,_Bif,3},Arg1,Arg2,Arg3,Dst) ->
+    emit_instruction(gc_bif3,[Fail,Live,ExtFunc,Arg1,Arg2,Arg3,Dst]);
+gc_bif3(Fail,Live,Bif,Arg1,Arg2,Arg3,Dst) when is_atom(Bif) ->
+    emit_instruction(gc_bif3,[Fail,Live,{extfunc,erlang,Bif,3},
+			      Arg1,Arg2,Arg3,Dst]).
 
+-spec line(Line::linearg()) -> ok.
 line(Line) ->
     inc_num_lines(),
     emit_instruction(line,[Line]).
 
-put_map_assoc(A1,A2,A3,A4,A5) ->
-    emit_instruction(put_map_assoc,[A1,A2,A3,A4,A5]).
+-spec put_map_assoc(Fail::jarg(),Src::src(),Dst::dst(),
+		    N::uarg(),List::listarg()) -> ok.
+put_map_assoc(Fail=?JARG,Src,Dst,N,List) ->
+    emit_instruction(put_map_assoc,[Fail,Src,Dst,N,List]).
 
-put_map_exact(A1,A2,A3,A4,A5) ->
-    emit_instruction(put_map_exact,[A1,A2,A3,A4,A5]).
+-spec put_map_exact(Fail::jarg(),Src::src(),Dst::dst(),
+		    N::uarg(),List::listarg()) -> ok.
+put_map_exact(Fail=?JARG,Src,Dst,N,List) ->
+    emit_instruction(put_map_exact,[Fail,Src,Dst,N,List]).
 
 is_map(A1,A2) ->
     emit_instruction(is_map,[A1,A2]).
@@ -1160,8 +1630,9 @@ encode_instruction(Mnemonic,Args) ->
     encode_instruction_(Opcode, Args).
 
 encode_instruction_(Opcode, Args) when ?is_byte(Opcode), is_list(Args) ->
-    #opcode{mnemonic=M,argtypes=ArgTypes} = maps:get(Opcode, opcode_map()),
-    ?verbose("encode_instruction: ~p ~p ~p\n", [M,ArgTypes,Args]),
+    #opcode{mnemonic=_Mnemonic,argtypes=ArgTypes} = 
+	maps:get(Opcode, opcode_map()),
+    ?verbose("encode_instruction: ~p ~p ~p\n", [_Mnemonic,ArgTypes,Args]),
     [Opcode|encode_arg_list(ArgTypes,Args)].
 
 %% emit_arg_list(ArgTypes, Args) ->
@@ -1338,7 +1809,10 @@ encode_A({u,A}) when A >= 0 ->   encode_ival(?U, A);
 encode_A(A) when is_integer(A), A>=0 -> encode_ival(?U, A).
 
 %% bit syntax flags encoded as u-tag
-encode_G({u,U}) when is_integer(U) ->  encode_ival(?U, U);
+encode_G({u,U}) when is_integer(U) ->
+    encode_ival(?U, U);
+encode_G({field_flags,Flags}) when is_list(Flags) ->
+    encode_ival(?U, encode_bit_flags(Flags));
 encode_G(Flags) when is_list(Flags) ->
     encode_ival(?U, encode_bit_flags(Flags)).
     
@@ -1375,8 +1849,8 @@ encode_bit_flags([]) ->
     0.
 
 decode_bit_flags(U) ->
-    if U band ?BIT_LITTLE =/= 0 -> [little]; true -> [] end ++
-    if U band ?BIT_SIGNED =/= 0 -> [signed]; true -> [] end ++
+    if U band ?BIT_LITTLE =/= 0 -> [little]; true -> [big] end ++
+    if U band ?BIT_SIGNED =/= 0 -> [signed]; true -> [unsigned] end ++
     if U band ?BIT_NATIVE =/= 0 -> [native]; true -> [] end ++
     if U band ?BIT_EXACT  =/= 0 -> [exact]; true -> [] end.
 
@@ -1569,7 +2043,6 @@ decode_arglist([T|Ts], Bin, Acc) ->
 	'G' ->
 	    {{u,U},Bin1} = decode(Bin),
 	    decode_arglist(Ts,Bin1,[decode_bit_flags(U) | Acc]);
-	    
 	'U' -> 
 	    {{u,U},Bin1} = decode(Bin),
 	    decode_arglist(Ts,Bin1,[U | Acc]);
@@ -1720,20 +2193,26 @@ i2bp_(X,N,Acc) -> i2bp_(X bsr 8,N+1,[(X band 16#ff)|Acc]).
 i2bn_(-1,N,Acc) -> {N,list_to_binary(Acc)};
 i2bn_(X,N,Acc) -> i2bn_(X bsr 8,N+1,[(X band 16#ff)|Acc]).
 
-load_file(Filename) ->
+load_binary(Binary) when is_binary(Binary) ->
     jinit_(),
-    Loaded = beamjit_file:fold_chunks(Filename, fun load_chunk/3, []),
-    RChunks = resolve_chunks(Loaded, []),
+    Res = load_(Binary),
     jterminate_(),
-    {ok, RChunks}.
+    Res.
 
-load_binary(Binary) ->
+load_file(Filename) when is_list(Filename) ->
     jinit_(),
-    Loaded = beamjit_file:fold_chunks(Binary, fun load_chunk/3, []),
-    RChunks = resolve_chunks(Loaded, []),
+    Res = load_(Filename),
     jterminate_(),
-    %% {ok, Loaded}.
-    {ok, RChunks}.
+    Res.
+
+load_(FilenameOrBinary) ->
+    case beamjit_file:fold_chunks(FilenameOrBinary, fun load_chunk/3, []) of
+	Error = {error,_} -> 
+	    Error;
+	Loaded ->
+	    RChunks = resolve_chunks(Loaded, []),
+	    {ok, RChunks}
+    end.
 
 load_chunk(<<"Atom">>, <<N:32,Atoms/binary>>, Acc) ->    
     Table = load_atoms(N, Atoms),
@@ -1883,13 +2362,22 @@ build_module() ->
     beamjit_file:close(Fd),
     Mod.
 
-print_file(Filename) ->
-    jinit_(),    
-    Loaded = beamjit_file:fold_chunks(Filename, fun load_chunk/3, []),
-    Resolved = resolve_chunks(Loaded, []),
-    print_chunks(Resolved),
+print_binary(Binary) when is_binary(Binary) ->
+    print_(Binary).
+
+print_file(Filename) when is_list(Filename) ->
+    print_(Filename).
+
+print_(FilenameOrBinary) ->
+    jinit_(),
+    Res = load_(FilenameOrBinary),
     jterminate_(),
-    ok.
+    case Res of
+	{ok,Chunks} ->
+	    print_chunks(Chunks);
+	Error ->
+	    Error
+    end.
 
 print_chunks([{code,Opts,InstrList}|Chunks]) ->
     io:format("*** CODE ***\n"),
@@ -1919,13 +2407,24 @@ print_functions([]) ->
     ok.
 
 %% Test that all instructions are encoded/decoded correctly
-test_file(Filename) ->
-    jinit_(),    
-    Loaded = beamjit_file:fold_chunks(Filename, fun load_chunk/3, []),
-    Resolved = resolve_chunks(Loaded, []),
-    test_chunks(Resolved),
-    jterminate_(),
-    ok.
+test_binary(Binary) when is_binary(Binary) ->
+    test_(Binary).
+test_file(Filename) when is_list(Filename) ->
+    test_(Filename).
+
+test_(FilenameOrBinary) ->
+    jinit_(),
+    case load_(FilenameOrBinary) of
+	{ok, Chunks} ->
+	    try test_chunks(Chunks) of
+		_ -> ok
+	    after
+		jterminate_()
+	    end;
+	Error ->
+	    jterminate_(),
+	    Error
+    end.
 
 test_chunks([{code,_Info,InstructionList}|Chunks]) ->
     lists:foreach(
@@ -2810,10 +3309,10 @@ opcode_map() ->
 ?OPENT(?BS_GET_UTF32,bs_get_utf32,[j,'_','_','G','_'],?OTP_R12B_5),
 ?OPENT(?BS_SKIP_UTF32,bs_skip_utf32,[j,'_','_','G'],?OTP_R12B_5),
 ?OPENT(?BS_UTF8_SIZE,bs_utf8_size,[j,'_','_'],?OTP_R12B_5),
-?OPENT(?BS_PUT_UTF8,bs_put_utf8,[j,'G','_'],?OTP_R12B_5),
+?OPENT(?BS_PUT_UTF8,bs_put_utf8,[j,'G',s],?OTP_R12B_5),
 ?OPENT(?BS_UTF16_SIZE,bs_utf16_size,[j,'_','_'],?OTP_R12B_5),
-?OPENT(?BS_PUT_UTF16,bs_put_utf16,[j,'G','_'],?OTP_R12B_5),
-?OPENT(?BS_PUT_UTF32,bs_put_utf32,[j,'G','_'],?OTP_R12B_5),
+?OPENT(?BS_PUT_UTF16,bs_put_utf16,[j,'G',s],?OTP_R12B_5),
+?OPENT(?BS_PUT_UTF32,bs_put_utf32,[j,'G',s],?OTP_R12B_5),
 ?OPENT(?ON_LOAD,on_load,[],?OTP_R13B_03),
 ?OPENT(?RECV_MARK,recv_mark,['_'],?OTP_R14A,?OTP_24),
 ?OPENT(?RECV_SET,recv_set,['_'],?OTP_R14A,?OTP_24),

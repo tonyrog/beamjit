@@ -9,3 +9,9 @@ clean:
 	@if [ -d "c_src" -a -f "c_src/Makefile" ]; then (cd c_src && $(MAKE) clean); fi
 	@if [ -d "test" -a -f "test/Makefile" ]; then (cd test && $(MAKE) clean); fi
 #@END-DIR-DEFAULT-RULES@
+
+doc: doc/index.html
+
+doc/index.html: src/beamjit.erl
+	edoc -o doc/ -files src/beamjit.erl
+	edoc -chunks -o doc/ -files src/beamjit.erl

@@ -45,11 +45,12 @@ bif(X) ->
     {A,T}.
 
 pbin(X,Y,Z,B) ->
-    <<B/binary,X:16/native, "Hello", Y:32/float, Y:32/signed-little, 
+    <<B/binary,B:10/binary, X:16/native, "Hello", 
+      Y:32/float, Y:32/signed-little, 
       Z/utf8, Z/utf16, Z/utf32, "World", X:32/little>>.
 
 pbits(X,Y,Z,B) ->
-    <<X:1, Y:13, Z:17, B/bitstring>>.
+    <<X:1, Y:13, Z:17, B/bitstring, B:17/bitstring>>.
 
 gbin(<<X1:16, X2:4/unit:16, Y1:32/float, Y2:32, 
        Z1/utf8, Z2/utf16, Z3/utf32, X1:32/little,Tail/binary>>) ->
