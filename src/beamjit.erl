@@ -7,8 +7,8 @@
 
 -module(beamjit).
 
-%%-define(verbose(F,A), io:format((F),(A))).
--define(verbose(F,A), ok).
+-define(verbose(F,A), io:format((F),(A))).
+%%-define(verbose(F,A), ok).
 
 -export([jit/1]).
 -export([jbegin/0]).
@@ -280,6 +280,7 @@
 -define(FR,      2).
 -define(ALLOC,   3).
 -define(LITERAL, 4).
+-define(TR,      5).
 -endif.
 -define(ALLOC_WORDS,  0).
 -define(ALLOC_FLOATS, 1).
@@ -638,7 +639,7 @@ allocate_zero(StackNeed) ->
 %%   <h4>opcode: 15</h4>
 %% @end
 %% @since OTP-R4
-%% @deprecated OTP-24.
+%% @deprecated OTP-24
 -spec allocate_heap_zero(StackNeed::unsigned(),HeapNeed::unsigned()) -> ok.
 allocate_heap_zero(StackNeed,HeapNeed) ->
     allocate_heap_zero(StackNeed,HeapNeed,live()).
@@ -1137,33 +1138,83 @@ is_function(Lbl,Arg1) ->
 call_ext_only(Arity,Fun) ->
     emit_instruction(call_ext_only,[Arity,Fun]).
 
+%% @doc
+%%   <h4>opcode: 79</h4>
+%% @end
+%% @since OTP-R7
+%% @deprecated OTP-R13B-03
 bs_start_match(Lbl,Reg) ->
     emit_instruction(bs_start_match,[Lbl,Reg]).
     
+%% @doc
+%%   <h4>opcode: 80</h4>
+%% @end
+%% @since OTP-R7
+%% @deprecated OTP-R13B-03
 bs_get_integer(Lbl,List) ->
     emit_instruction(bs_get_integer,[Lbl,List]).
-    
+
+%% @doc
+%%   <h4>opcode: 81</h4>
+%% @end
+%% @since OTP-R7
+%% @deprecated OTP-R13B-03    
 bs_get_float(Lbl,List) ->
     emit_instruction(bs_get_float,[Lbl,List]).
-    
+
+%% @doc
+%%   <h4>opcode: 82</h4>
+%% @end
+%% @since OTP-R7
+%% @deprecated OTP-R13B-03    
 bs_get_binary(Lbl,List) ->
     emit_instruction(bs_get_binary,[Lbl,List]).
 
+%% @doc
+%%   <h4>opcode: 83</h4>
+%% @end
+%% @since OTP-R7
+%% @deprecated OTP-R13B-03
 bs_skip_bits(Lbl,List) ->
     emit_instruction(bs_skip_bits,[Lbl,List]).
 
+%% @doc
+%%   <h4>opcode: 84</h4>
+%% @end
+%% @since OTP-R7
+%% @deprecated OTP-R13B-03
 bs_test_tail(Lbl,List) ->
     emit_instruction(bs_test_tail,[Lbl,List]).
 
+%% @doc
+%%   <h4>opcode: 85</h4>
+%% @end
+%% @since OTP-R7
+%% @deprecated OTP-R13B-03
 bs_save(N) ->
     emit_instruction(bs_save,[N]).
 
+%% @doc
+%%   <h4>opcode: 86</h4>
+%% @end
+%% @since OTP-R7
+%% @deprecated OTP-R13B-03
 bs_restore(N) ->
     emit_instruction(bs_restore,[N]).
     
+%% @doc
+%%   <h4>opcode: 87</h4>
+%% @end
+%% @since OTP-R7A
+%% @deprecated OTP-R13B-03
 bs_init(N,Flags) ->
     emit_instruction(bs_init,[N,Flags]).
 
+%% @doc
+%%   <h4>opcode: 88</h4>
+%% @end
+%% @since OTP-R7A
+%% @deprecated OTP-R13B-03
 bs_final(Lbl,X) ->
     emit_instruction(bs_final,[Lbl,X]).
 
@@ -1188,34 +1239,52 @@ bs_put_string(Len,StrArg) ->
 bs_need_buf(N) ->
     emit_instruction(bs_need_buf,[N]).
 
+%% @doc
+%%   <h4>opcode: 94</h4>
+%% @end
+%% @since OTP-R8
+%% @deprecated OTP-24.
+-spec fclearerror() -> ok.
 fclearerror() ->
     emit_instruction(fclearerror).
 
-fcheckerror(Fail) ->
-    emit_instruction(fcheckerror,[Fail]).
+%% @doc
+%%   <h4>opcode: 95</h4>
+%% @end
+%% @since OTP-R8
+%% @deprecated OTP-24.
+-spec fcheckerror(Lbl::jarg()) -> ok.
+fcheckerror(Lbl) ->
+    emit_instruction(fcheckerror,[Lbl]).
+
 
 -spec fmove(Src::dlq(), Dst::dl()) -> ok.
-
 fmove(Src,Dst) ->
     emit_instruction(fmove,[Src,Dst]).
 
+-spec fconv(Src::reg(), FDst::larg()) -> ok.
 fconv(Src,FDst) ->
     emit_instruction(fconv,[Src,FDst]).
 
-fadd(Fail,FA1,FA2,FDst) ->
-    emit_instruction(fadd,[Fail,FA1,FA2,FDst]).
+-spec fadd(Fail::jarg(),FArg1::larg(),FArg2::larg(),FDst::larg()) -> ok.
+fadd(Fail,FArg1,FArg2,FDst) ->
+    emit_instruction(fadd,[Fail,FArg1,FArg2,FDst]).
 
-fsub(Fail,FA1,FA2,FDst) ->
-    emit_instruction(fsub,[Fail,FA1,FA2,FDst]).
+-spec fsub(Fail::jarg(),FArg1::larg(),FArg2::larg(),FDst::larg()) -> ok.
+fsub(Fail,FArg1,FArg2,FDst) ->
+    emit_instruction(fsub,[Fail,FArg1,FArg2,FDst]).
 
-fmul(Fail,FA1,FA2,FDst) ->
-    emit_instruction(fmul,[Fail,FA1,FA2,FDst]).
+-spec fmul(Fail::jarg(),FArg1::larg(),FArg2::larg(),FDst::larg()) -> ok.
+fmul(Fail,FArg1,FArg2,FDst) ->
+    emit_instruction(fmul,[Fail,FArg1,FArg2,FDst]).
 
+-spec fdiv(Fail::jarg(),FArg1::larg(),FArg2::larg(),FDst::larg()) -> ok.
 fdiv(Fail,FA1,FA2,FDst) ->
     emit_instruction(fdiv,[Fail,FA1,FA2,FDst]).
 
-fnegate(Fail,FA1,FDst) ->
-    emit_instruction(fnegate,[Fail,FA1,FDst]).
+-spec fnegate(Fail::jarg(),FArg1::larg(),FDst::larg()) -> ok.
+fnegate(Fail,FArg1,FDst) ->
+    emit_instruction(fnegate,[Fail,FArg1,FDst]).
 
 make_fun2(Arg) ->
     emit_instruction(make_fun2,[Arg]).
@@ -1250,9 +1319,12 @@ apply(Arity) ->
 apply_last(Arity,U) ->
     emit_instruction(apply_last,[Arity,U]).
 
+%% @doc Test the type of Arg1 and jump to Lbl if it is not a Boolean.
 is_boolean(Fail,A1) ->
     emit_instruction(is_boolean, [Fail, A1]).
 
+%% @doc Test the type of Arg1 and jump to Lbl if it is not a
+%%      function of arity Arity.
 is_function2(Fail,A1,A2) ->
     emit_instruction(is_function2,[Fail,A1,A2]).
 
@@ -1285,6 +1357,10 @@ bs_save2(Ctx, N) ->
 bs_restore2(Ctx, N) ->
     emit_instruction(bs_restore2,[Ctx, N]).
 
+%% @doc Call the bif Bif with the argument Arg, and store the result in Reg.
+%%      On failure jump to Lbl.
+%%      Do a garbage collection if necessary to allocate space on the heap
+%%      for the result (saving Live number of X registers).
 -spec gc_bif1(Fail::jarg(),Live::uarg(),Bif::mfa(1)|atom(),
 	      Arg::src(),Dst::dst()) -> ok.
 gc_bif1(Fail,Live,ExtFunc={extfunc,erlang,_Bif,1},Arg,Dst) ->
@@ -1292,6 +1368,11 @@ gc_bif1(Fail,Live,ExtFunc={extfunc,erlang,_Bif,1},Arg,Dst) ->
 gc_bif1(Fail,Live,Bif,Arg,Dst) when is_atom(Bif) ->
     emit_instruction(gc_bif1,[Fail,Live,{extfunc,erlang,Bif,1},Arg,Dst]).
 
+%% @doc Call the bif Bif with the arguments Arg1 and Arg2,
+%%      and store the result in Reg.
+%%      On failure jump to Lbl.
+%%      Do a garbage collection if necessary to allocate space on the heap
+%%      for the result (saving Live number of X registers).
 -spec gc_bif2(Fail::jarg(),Live::uarg(),Bif::mfa(2)|atom(),
 	      Arg1::src(),Arg2::src(),Dst::dst()) -> ok.
 gc_bif2(Fail,Live,ExtFunc={extfunc,erlang,_Bif,2},Arg1,Arg2,Dst) ->
@@ -1299,6 +1380,11 @@ gc_bif2(Fail,Live,ExtFunc={extfunc,erlang,_Bif,2},Arg1,Arg2,Dst) ->
 gc_bif2(Fail,Live,Bif,Arg1,Arg2,Dst) when is_atom(Bif) ->
     emit_instruction(gc_bif2,[Fail,Live,{extfunc,erlang,Bif,2},Arg1,Arg2,Dst]).
 
+%% @doc
+%%   <h4>opcode: 126</h4>
+%% @end
+%% @since OTP-R11B
+%% @deprecated OTP-R12B
 bs_final2(X,Y) ->
     emit_instruction(bs_final,[X,Y]).
 
@@ -1308,6 +1394,7 @@ bs_bits_to_bytes2(A2,A3) ->
 put_literal(Index, Dst) ->
     emit_instruction(put_literal,[Index, Dst]).
 
+%% @doc Test the type of Arg1 and jump to Lbl if it is not a bit string.
 is_bitstr(Fail,A1) ->
     emit_instruction(is_bitstr,[Fail,A1]).
 
@@ -1329,6 +1416,8 @@ bs_append(Fail,Arg2,W,R,U,Arg6,Flags,Arg8) ->
 bs_private_append(Fail,Arg2,U,Arg4,Flags,Arg6) ->
     emit_instruction(bs_private_append,[Fail,Arg2,U,Arg4,Flags,Arg6]).
 
+%% @doc Reduce the stack usage by N words,
+%%      keeping the CP on the top of the stack.
 trim(N,Remaining) ->
     emit_instruction(trim,[N,Remaining]).
 
@@ -1375,14 +1464,28 @@ bs_put_utf32(Fail,Flags,Src) ->
 on_load() ->
     emit_instruction(on_load).
 
+%% @doc  Save the end of the message queue and the address of
+%%       the label Label so that a recv_set instruction can start
+%%       scanning the inbox from this position.
+%% @end
 -spec recv_mark(Lbl::jarg()) -> ok.
 recv_mark(Lbl) ->
     emit_instruction(recv_mark,[Lbl]).
 
+%% @doc Check that the saved mark points to Label and set the
+%%      save pointer in the message queue to the last position
+%%      of the message queue saved by the recv_mark instruction.
+%% @end
 -spec recv_set(Lbl::jarg()) -> ok.
 recv_set(Lbl) ->
     emit_instruction(recv_set,[Lbl]).
 
+%% @doc Call the bif Bif with the arguments Arg1, Arg2 and Arg3,
+%%      and store the result in Reg.
+%%      On failure jump to Lbl.
+%%      Do a garbage collection if necessary to allocate space on the heap
+%%      for the result (saving Live number of X registers).
+%% @end
 -spec gc_bif3(Fail::jarg(),Live::uarg(),Bif::mfa(3)|atom(),
 	      Arg1::src(),Arg2::src(),Arg3::src(),Dst::dst()) -> ok.
 gc_bif3(Fail,Live,ExtFunc={extfunc,erlang,_Bif,3},Arg1,Arg2,Arg3,Dst) ->
@@ -1415,73 +1518,146 @@ has_map_fields(A1,A2,A3) ->
 get_map_elements(A1,A2,A3) ->
     emit_instruction(get_map_elements,[A1,A2,A3]).
 
+%% @doc Test the type of Reg and jumps to Lbl if it is not a tuple.
+%%      Test the arity of Reg and jumps to Lbl if it is not N.
+%%      Test the first element of the tuple and jumps to Lbl if it is not Atom.
+%% @end
 is_tagged_tuple(A1,A2,A3,A4) ->
     emit_instruction(is_tagged_tuple,[A1,A2,A3,A4]).
-    
+
+%% @doc  Given the raw stacktrace in x(0), build a cooked stacktrace suitable
+%%       for human consumption. Store it in x(0). Destroys all other registers.
+%%       Do a garbage collection if necessary to allocate space on the heap
+%%       for the result.    
+%% @end
 build_stacktrace() ->
     emit_instruction(build_stacktrace).
 
+%% @doc  This instruction works like the erlang:raise/3 BIF, except that the
+%%       stacktrace in x(2) must be a raw stacktrace.
+%%       x(0) is the class of the exception (error, exit, or throw),
+%%       x(1) is the exception term, and x(2) is the raw stackframe.
+%%       If x(0) is not a valid class, the instruction will not throw an
+%%       exception, but store the atom 'badarg' in x(0) and execute the
+%%       next instruction.
+%% @end
 raw_raise() ->
     emit_instruction(raw_raise).
 
+%% @doc  Get the head (or car) part of a list (a cons cell) from Source and
+%%       put it into the register Head.
+%% @end
 get_hd(A1,A2) ->
     emit_instruction(get_hd,[A1,A2]).
     
+%% @doc  Get the tail (or cdr) part of a list (a cons cell) from Source and
+%%       put it into the register Tail.
+%% @end
 get_tl(A1,A2) ->
     emit_instruction(get_tl,[A1,A2]).
 
+%% @doc  Build a tuple with the elements in the list Elements and put it
+%%       into register Destination.
+%% @end
 put_tuple2(Dst,List) ->
     emit_instruction(put_tuple2,[Dst,List]).
 
--spec bs_get_tail(Src::src(), Dst::dst(), Live::unsigned) -> ok.
+%% @doc  Sets Dst to the tail of Ctx at the current position
+%% @end
+-spec bs_get_tail(Ctx::src(), Dst::dst(), Live::unsigned) -> ok.
 
-bs_get_tail(Src,Dst,Live) ->
-    emit_instruction(bs_get_tail,[Src,Dst,Live]).
+bs_get_tail(Ctx,Dst,Live) ->
+    emit_instruction(bs_get_tail,[Ctx,Dst,Live]).
 
+%% @doc  Starts a binary match sequence
+%% @end
 bs_start_match3(A1,A2,A3,A4) ->
     emit_instruction(bs_start_match3,[A1,A2,A3,A4]).
 
+%% @doc  Sets Dst to the current position of Ctx
+%% @end
 bs_get_position(A1,A2,A3) ->
     emit_instruction(bs_get_position,[A1,A2,A3]).
 
+%% @doc  Sets the current position of Ctx to Pos
+%% @end
 bs_set_position(A1,A2) ->
     emit_instruction(bs_set_position,[A1,A2]).
 
+%% @doc  Swaps the contents of two registers.
+%% @end
 swap(A1,A2) ->
     emit_instruction(swap,[A1,A2]).
 
+%% @doc  As bs_start_match3, but the fail label can be 'no_fail' when we know
+%%       it will never fail at runtime, or 'resume' when we know the input is
+%%       a match context.
+%% @end
 bs_start_match4(A1,A2,A3,A4) ->
     emit_instruction(bs_start_match4,[A1,A2,A3,A4]).
 
+%% @doc  Build a fun with the environment in the list EnvTerms and put it
+%%       into register Dst.
+%% @end
 make_fun3(A1,A2,A3) ->
     emit_instruction(make_fun3,[A1,A2,A3]).
     
-init_yregs(A1) ->
-    emit_instruction(init_yregs,[A1]).
+%% @doc  Initialize the Y registers in the list.
+%% @end
+init_yregs(List) ->
+    emit_instruction(init_yregs,[List]).
 
-recv_marker_bind(A1,A2) ->
-    emit_instruction(recv_marker_bind,[A1,A2]).
+%% @doc  Associates Reference with a previously reserved marker.
+%% @end
+-spec recv_marker_bind(Marker::src(), Reference::src()) -> ok.
+recv_marker_bind(Marker, Reference) ->
+    emit_instruction(recv_marker_bind,[Marker, Reference]).
 
-recv_marker_clear(A1) ->
-    emit_instruction(recv_marker_clear,[A1]).
-    
-recv_marker_reserve(A1) ->
-    emit_instruction(recv_marker_reserve,[A1]).
+%% @doc  Clears the receive marker associated with the given Reference.
+%% @end
+-spec recv_marker_clear(Reference::src()) -> ok.
+recv_marker_clear(Reference) ->
+    emit_instruction(recv_marker_clear,[Reference]).
 
-recv_marker_use(A1) ->
-    emit_instruction(recv_marker_use,[A1]).
+%% @doc  Creates a receive marker which can be later bound to a reference.
+%% @end
+-spec recv_marker_reserve(Marker::src()) -> ok.
+recv_marker_reserve(Marker) ->
+    emit_instruction(recv_marker_reserve,[Marker]).
 
+%% @doc  Sets the current receive cursor to the marker associated with
+%%       the given Reference.
+%% @end
+-spec recv_marker_use(Reference::src()) -> ok.
+
+recv_marker_use(Reference) ->
+    emit_instruction(recv_marker_use,[Reference]).
+
+%% @doc  Builda a new binary using the binary syntax.
+%% @end
 bs_create_bin(Fail,Alloc,Unit,Dst,OpList) ->
     bs_create_bin(Fail,Alloc,live(),Unit,Dst,OpList).
 bs_create_bin(Fail,Alloc,Live,Unit,Dst,OpList) ->
     emit_instruction(bs_create_bin,[Fail,Alloc,Live,Unit,Dst,OpList]).
 
+%% @doc Calls the fun Func with arity Arity. Assume arguments in registers x(0)
+%%      to x(Arity-1). Tag can be one of:
+%%
+%%      * FunIndex      - Func is always a local fun identified by FunIndex
+%%      * {atom,safe}   - Func is known to be a fun of correct arity.
+%%      * {atom,unsafe} - Nothing is known about Func.
+%% @end
 call_fun2(Tag, Arity, Func) ->
     emit_instruction(call_fun2,[Tag,Arity,Func]).
 
+%% @doc  No-op at start of each function declared in -nifs().
+%% @end
+-spec nif_start() -> ok.
 nif_start() ->
     emit_instruction(nif_start).
 
+%% @doc Raises a {badrecord,Value} error exception.
+-spec badrecord(Value::src()) -> ok.
 badrecord(Value) ->
     emit_instruction(badrecord,[Value]).
 
@@ -1969,6 +2145,13 @@ decode(<<?LITERAL:4,0:1,?Z:3, Bin/binary>>) ->
 decode(<<?FR:4,0:1,?Z:3, Bin/binary>>) ->
     {{u,R},Bin1} = decode(Bin),
     {{fr,R}, Bin1};
+
+decode(<<?TR:4,0:1,?Z:3, Bin/binary>>) ->
+    {Reg,Bin1} = decode(Bin),
+    {{u,TypeIndex},Bin2} = decode(Bin1),
+    %% fixme load type info...
+    {{tr,Reg,TypeIndex}, Bin2};
+
 decode(Bin) ->
     case decode_ival(Bin) of
 	{{a,A},Bin1} ->
@@ -2114,7 +2297,9 @@ decode_arglist([T|Ts], Bin, Acc) ->
 		{X={x,_},Bin1} ->
 		    decode_arglist(Ts,Bin1,[X | Acc]);
 		{Y={y,_},Bin1} ->
-		    decode_arglist(Ts,Bin1,[Y | Acc])
+		    decode_arglist(Ts,Bin1,[Y | Acc]);
+		{Tr={tr,_,_},Bin1} ->
+		    decode_arglist(Ts,Bin1,[Tr | Acc])
 	    end;
 	d ->
 	    case decode(Bin) of
@@ -2298,11 +2483,11 @@ build_module() ->
 			   {options, []},
 			   {source, Ctx#jctx.source}]),
     %% - Dbgi?
-    {NL,NF,Line} = build_lines(),
+    {NL,NF,NMax,Line} = build_lines(),
     NumLineInstrs = Ctx#jctx.num_lines,
     LineChunk = <<?LINES_VER:32,?LINES_BITS:32,
 		  NumLineInstrs:32,
-		  (NL-1):32,NF:32,Line/binary>>,
+		  NL:32,NF:32,Line/binary>>,  %% NL-1
     %% open
     {ok,Fd} = beamjit_file:open_ram([write]),
     PatchMe = 0,
@@ -2802,20 +2987,21 @@ build_lines() ->
     %% Map source-file to index
     FnMap = maps:from_list([{Source,0} |
 			    lists:zip(Fns1,lists:seq(1, length(Fns1)))]),
-    build_lines_(LineList, 0, FnMap, []).
+    build_lines_(LineList, 0, FnMap, 0, []).
 
-build_lines_([{_I,{Fname,Ln}}|List], J, FnMap, Acc) ->
+build_lines_([{_I,{Fname,Ln}}|List], J, FnMap, Max, Acc) ->
     case maps:get(Fname, FnMap) of
 	J -> 
 	    build_lines_(List, J, FnMap,
-			[encode_ival(?I,Ln)|Acc]);
+			 max(Max, Ln), [encode_ival(?I,Ln)|Acc]);
 	J1 ->
 	    build_lines_(List, J1, FnMap,
-			[encode_ival(?I,Ln),encode_ival(?A,J1)|Acc])
+			 max(Max, Ln),
+			 [encode_ival(?I,Ln),encode_ival(?A,J1)|Acc])
     end;
-build_lines_([_|List], J, FnMap, Acc) ->
-    build_lines_(List, J, FnMap, Acc);
-build_lines_([], _J, FnMap, Acc) ->
+build_lines_([_|List], J, FnMap, Max, Acc) ->
+    build_lines_(List, J, FnMap, Max, Acc);
+build_lines_([], _J, FnMap, Max, Acc) ->
     Fn1 = tl(lists:sort([{Ix,Fn} || {Fn,Ix} <- maps:to_list(FnMap)])),
     NL = length(Acc),
     NF = length(Fn1),
@@ -2826,7 +3012,7 @@ build_lines_([], _J, FnMap, Acc) ->
 		Bin = unicode:characters_to_binary(Fn, utf8),
 		<<(byte_size(Bin)):16, Bin/binary>>
 	    end || {_,Fn} <- Fn1]]),
-    {NL,NF,Line}.
+    {NL,NF,Max,Line}.
 
 decode_line(U) when is_integer(U) ->
     case find_by_index(U, (jctx())#jctx.lines) of    
